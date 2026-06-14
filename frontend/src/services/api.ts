@@ -153,9 +153,16 @@ export interface Customer {
   lastPurchaseDate: string | null;
 }
 
+// Configurable API base URL – set VITE_API_URL in your deployment environment.
+// Falls back to the production Render backend when the variable is not defined.
+const API_BASE_URL =
+  (import.meta as ImportMeta & { env: Record<string, string> }).env.VITE_API_URL ||
+  'https://xeno-assignment-backend.onrender.com';
+
 // Request Helper
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const url = path.startsWith('/') ? path : `/${path}`;
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  const url = `${API_BASE_URL}${normalizedPath}`;
   const response = await fetch(url, {
     headers: {
       'Content-Type': 'application/json',
