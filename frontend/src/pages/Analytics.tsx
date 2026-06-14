@@ -26,7 +26,7 @@ import {
   PieChart, Pie, Cell, 
   XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer 
 } from 'recharts';
-import { ChartTooltip } from '../components/ChartTooltip';
+
 
 export const Analytics: React.FC = () => {
   // Sync Timestamp states
@@ -47,7 +47,7 @@ export const Analytics: React.FC = () => {
   const [loadingCampMetrics, setLoadingCampMetrics] = useState(false);
   const [campMetricsError, setCampMetricsError] = useState<string | null>(null);
   const [hoveredSlice, setHoveredSlice] = useState<number | null>(null);
-  const [hoveredBarIndex, setHoveredBarIndex] = useState<number | null>(null);
+
 
   // Filter campaigns that have been launched (RUNNING, COMPLETED, CANCELLED, FAILED) (Memoized)
   const launchedCampaigns = useMemo(() => {

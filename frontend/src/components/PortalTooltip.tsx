@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom';
 
 interface PortalTooltipProps {
   active: boolean;
-  targetRef: React.RefObject<HTMLElement>;
+  targetRef: React.RefObject<HTMLElement | null>;
   children: React.ReactNode;
 }
 
