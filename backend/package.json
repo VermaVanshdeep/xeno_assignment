@@ -1,0 +1,38 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "seed": "tsx src/db/seed.ts",
+    "seed:analytics": "tsx src/db/seed_analytics.ts",
+    "db:verify": "tsx src/db_verify.ts",
+    "test:segment": "tsx src/services/test-segment.ts",
+    "test:campaign": "NODE_ENV=test tsx src/services/test-campaign.ts",
+    "test:channel": "NODE_ENV=test tsx src/services/test-channel.ts",
+    "test:analytics": "NODE_ENV=test tsx src/services/test-analytics.ts",
+    "test:ai": "NODE_ENV=test tsx src/services/test-ai.ts",
+    "test:api": "NODE_ENV=test tsx src/services/test-api.ts",
+    "test": "npm run test:segment && npm run test:campaign && npm run test:channel && npm run test:analytics && npm run test:ai && npm run test:api"
+  },
+  "dependencies": {
+    "@faker-js/faker": "^10.4.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "drizzle-orm": "^0.45.2",
+    "express": "^4.19.2",
+    "groq-sdk": "^1.2.1",
+    "pg": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.12.12",
+    "@types/pg": "^8.20.0",
+    "drizzle-kit": "^0.31.10",
+    "tsx": "^4.10.1",
+    "typescript": "^5.4.5"
+  }
+}
