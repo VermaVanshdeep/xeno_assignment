@@ -84,7 +84,7 @@ const OcrImportModal: React.FC<OcrImportModalProps> = React.memo(({ isOpen, onCl
 
       const response = await ocrImportInvoice(base64, file.name, file.type);
       if (!response.success) {
-        throw new Error(response.message || 'Extraction failed');
+        throw new Error('Extraction failed');
       }
 
       const d = response.data;
