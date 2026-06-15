@@ -65,3 +65,14 @@ export interface RevenueTrend {
   revenue: number;
 }
 
+export interface CRMHealth {
+  campaignHealthScore: number;        // 0-100, weighted avg of delivery+ctr
+  audienceQualityScore: number;       // % of customers with ≥1 order
+  topConvertingCity: string;          // city with highest clicked events per delivered
+  revenueAttributionPct: number;      // attributed revenue / total revenue × 100
+  bestCampaign: { id: string; name: string; revenue: number; channel: string } | null;
+  worstCampaign: { id: string; name: string; revenue: number; channel: string } | null;
+  totalAttributedRevenue: number;
+  avgCampaignROI: number;
+}
+

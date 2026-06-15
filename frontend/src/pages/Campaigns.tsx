@@ -1,5 +1,4 @@
-import React, { useState, useEffect } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useMemo } from 'react';
 import useApi from '../hooks/useApi';
 import { 
   listCampaigns, 
@@ -9,164 +8,297 @@ import {
   listSegments,
   getSegment,
   previewSegment,
-  fetchCustomerAnalytics
+  generateCampaignDraft,
+  regenerateCampaignField,
+  getCampaignPostLaunchInsights,
+  getAudienceRationale,
+  fetchCampaignsSummary,
+  fetchChannelPerformance,
+  pollCampaignAnalytics
 } from '../services/api';
-import type { SegmentPreviewStats } from '../services/api';
-import DataTable from '../components/DataTable';
+import type { 
+  SegmentPreviewStats,
+  CampaignDraftAI,
+  PostLaunchInsightsAI,
+  AudienceRationaleAI,
+  CampaignAnalytics
+} from '../services/api';
 import { Badge } from '../components/Badge';
 import { BrandedEmptyState } from '../components/BrandedEmptyState';
 import { PremiumGlassCard } from '../components/PremiumGlassCard';
+import { formatCompactCurrency, formatPercent, formatFullNumber } from '../services/formatters';
+
+const GOAL_PRESETS = [
+  'Customer Retention',
+  'Win Back Dormant Users',
+  'Increase AOV',
+  'New Product Launch',
+  'Festival Promotion',
+  'Inventory Clearance',
+  'Custom Goal'
+];
+
+/* ── Live Progress Panel ── */
+const LiveProgressPanel: React.FC<{ campaignId: string }> = ({ campaignId }) => {
+  const [liveData, setLiveData] = useState<CampaignAnalytics | null>(null);
+
+  useEffect(() => {
+    const fetchLive = async () => {
+      try {
+        const data = await pollCampaignAnalytics(campaignId);
+        setLiveData(data);
+        if (data.sent > 0 && data.sent === data.delivered && data.failed === 0) {
+          // It's technically complete, stop aggressive polling
+        }
+      } catch (err) {
+        console.error('Polling error', err);
+      }
+    };
+    fetchLive();
+    const interval = setInterval(fetchLive, 5000);
+    return () => clearInterval(interval);
+  }, [campaignId]);
+
+  if (!liveData) {
+    return <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>Connecting to messaging gateway...</div>;
+  }
+
+  const { audienceSize, sent, delivered, opened, clicked, campaignRevenue, campaignRoi } = liveData;
+
+  const funnel = [
+    { label: 'Sent', count: sent, pct: audienceSize > 0 ? (sent / audienceSize) * 100 : 0 },
+    { label: 'Delivered', count: delivered, pct: sent > 0 ? (delivered / sent) * 100 : 0 },
+    { label: 'Opened', count: opened, pct: delivered > 0 ? (opened / delivered) * 100 : 0 },
+    { label: 'Clicked', count: clicked, pct: delivered > 0 ? (clicked / delivered) * 100 : 0 },
+  ];
+
+  return (
+    <div className="live-progress-panel">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h4 style={{ fontSize: '13px', fontWeight: 700, color: '#F1F5F9', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className="spinner" style={{ width: 12, height: 12, border: '2px solid rgba(168,85,247,0.3)', borderTopColor: '#A855F7', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></span>
+          Live Campaign Progress
+        </h4>
+        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Target: {formatFullNumber(audienceSize)}</span>
+      </div>
+
+      <div className="live-progress-metrics">
+        <div className="live-metric-card">
+          <span className="live-metric-label">Delivered</span>
+          <span className="live-metric-value" style={{ color: '#10B981' }}>{formatFullNumber(delivered)}</span>
+          <span className="live-metric-rate">{formatPercent(liveData.deliveryRate)} delivery rate</span>
+        </div>
+        <div className="live-metric-card">
+          <span className="live-metric-label">Opened</span>
+          <span className="live-metric-value" style={{ color: '#4F8CFF' }}>{formatFullNumber(opened)}</span>
+          <span className="live-metric-rate">{formatPercent(liveData.openRate)} open rate</span>
+        </div>
+        <div className="live-metric-card">
+          <span className="live-metric-label">Revenue</span>
+          <span className="live-metric-value" style={{ color: '#22D3EE' }}>{formatCompactCurrency(campaignRevenue)}</span>
+          <span className="live-metric-rate">Real-time attribution</span>
+        </div>
+        <div className="live-metric-card">
+          <span className="live-metric-label">ROI</span>
+          <span className="live-metric-value" style={{ color: campaignRoi >= 0 ? '#10B981' : '#EF4444' }}>
+            {campaignRoi > 0 ? '+' : ''}{campaignRoi.toFixed(0)}%
+          </span>
+          <span className="live-metric-rate">vs Campaign Cost</span>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 8 }}>
+        {funnel.map((step, i) => (
+          <div key={i} className="funnel-progress-row">
+            <div className="funnel-progress-header">
+              <span style={{ color: 'var(--text-secondary)' }}>{step.label}</span>
+              <span style={{ fontWeight: 600, color: '#F1F5F9' }}>{formatFullNumber(step.count)} <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: 4 }}>({formatPercent(step.pct)})</span></span>
+            </div>
+            <div className="funnel-progress-track">
+              <div className="funnel-progress-fill" style={{ width: `${step.pct}%`, background: i === 0 ? '#64748B' : i === 1 ? '#10B981' : i === 2 ? '#4F8CFF' : '#A855F7' }}></div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
 
 export const Campaigns: React.FC = () => {
-  const location = useLocation();
-  const navigate = useNavigate();
 
   const { data: campaigns, loading: loadingCampaigns, refetch: refetchCampaigns } = useApi(listCampaigns);
-  const { data: segments, loading: loadingSegments } = useApi(listSegments);
+  const { data: segments } = useApi(listSegments);
+  const { data: campaignSummaries, refetch: refetchSummaries } = useApi(fetchCampaignsSummary);
+  const { data: channelPerf } = useApi(fetchChannelPerformance);
 
-  const [name, setName] = useState('');
+  // Phase 1: Setup State
   const [selectedSegmentId, setSelectedSegmentId] = useState('');
   const [channel, setChannel] = useState<'WHATSAPP' | 'SMS' | 'EMAIL' | 'RCS'>('WHATSAPP');
-  const [messageTemplate, setMessageTemplate] = useState('');
+  const [goalPreset, setGoalPreset] = useState<string>('');
+  const [customGoal, setCustomGoal] = useState<string>('');
+  
+  // Phase 2: Editable AI Draft State
+  const [draft, setDraft] = useState<CampaignDraftAI | null>(null);
+  const [draftLoading, setDraftLoading] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [fieldLoading, setFieldLoading] = useState<Record<string, boolean>>({});
+  const [rationale, setRationale] = useState<AudienceRationaleAI | null>(null);
+
+  // Audience Preview State
+  const [previewStats, setPreviewStats] = useState<SegmentPreviewStats | null>(null);
+  const [_isPreviewLoading, setIsPreviewLoading] = useState(false);
+
+  // Table Action State
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [launchMsg, setLaunchMsg] = useState<{ id: string; type: 'success' | 'error'; text: string } | null>(null);
-  const { data: customerData } = useApi(fetchCustomerAnalytics);
 
-  const [previewStats, setPreviewStats] = useState<SegmentPreviewStats | null>(null);
-  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
-  const [previewError, setPreviewError] = useState<string | null>(null);
+  // Drawer / Insights State
+  const [expandedCampaign, setExpandedCampaign] = useState<string | null>(null);
+  const [insights, setInsights] = useState<Record<string, PostLaunchInsightsAI>>({});
+  const [insightsLoading, setInsightsLoading] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (!selectedSegmentId) {
       setPreviewStats(null);
       return;
     }
-
     const loadSegmentPreview = async () => {
       setIsPreviewLoading(true);
-      setPreviewError(null);
       try {
         const segment = await getSegment(selectedSegmentId);
         const res = await previewSegment(segment.rulesJson);
         setPreviewStats(res.stats);
-      } catch (err: any) {
-        setPreviewError(err.message || 'Failed to estimate audience');
+      } catch (err) {
         setPreviewStats(null);
       } finally {
         setIsPreviewLoading(false);
       }
     };
-
     loadSegmentPreview();
   }, [selectedSegmentId]);
 
-  const totalCustomers = customerData?.totalCustomers || 0;
-  const matchCount = previewStats?.matchedAudience || 0;
-  const matchPercent = totalCustomers > 0 ? ((matchCount / totalCustomers) * 100).toFixed(1) : '0.0';
+  const activeGoal = goalPreset === 'Custom Goal' ? customGoal : goalPreset;
 
-  const formatPotentialRevenue = (value: number) => {
-    if (value >= 10000000) return `₹${(value / 10000000).toFixed(1)} Cr`;
-    if (value >= 100000) return `₹${(value / 100000).toFixed(1)} L`;
-    return `₹${value.toLocaleString('en-IN')}`;
+  const handleGenerateDraft = async () => {
+    if (!selectedSegmentId || !channel || !activeGoal) return;
+    
+    setDraftError(null);
+    setDraftLoading(true);
+    setDraft(null);
+    setRationale(null);
+
+    const segment = segments?.find(s => s.id === selectedSegmentId);
+    const segName = segment?.name || 'Unknown Segment';
+    const segSize = previewStats?.matchedAudience || 0;
+
+    try {
+      const [draftRes, rationaleRes] = await Promise.all([
+        generateCampaignDraft(segName, segSize, channel, activeGoal),
+        getAudienceRationale(segName, segSize, previewStats || {}, channel, activeGoal).catch(() => null)
+      ]);
+      setDraft(draftRes);
+      if (rationaleRes) setRationale(rationaleRes);
+    } catch (err: any) {
+      setDraftError(err.message || 'AI Generation Failed. Please retry.');
+    } finally {
+      setDraftLoading(false);
+    }
   };
 
-  useEffect(() => {
-    let draft = null;
+  const handleRegenerateField = async (field: keyof CampaignDraftAI) => {
+    if (!draft || !selectedSegmentId || !channel || !activeGoal) return;
+    
+    setFieldLoading(prev => ({ ...prev, [field]: true }));
+    setDraftError(null);
 
-    if (location.state?.campaign) {
-      draft = location.state.campaign;
-      try {
-        sessionStorage.setItem('pendingCampaignDraft', JSON.stringify(draft));
-      } catch {}
-      navigate(location.pathname, { replace: true, state: null });
-    } else {
-      const stored = sessionStorage.getItem('pendingCampaignDraft');
-      if (stored) {
-        try {
-          draft = JSON.parse(stored);
-        } catch {}
-      }
+    const segment = segments?.find(s => s.id === selectedSegmentId);
+    const segName = segment?.name || 'Unknown Segment';
+    const segSize = previewStats?.matchedAudience || 0;
+
+    try {
+      const res = await regenerateCampaignField(field, draft, segName, segSize, channel, activeGoal);
+      setDraft(prev => prev ? ({ ...prev, [field]: res.value }) : null);
+    } catch (err: any) {
+      setDraftError(err.message || `Failed to regenerate ${field}. Please retry.`);
+    } finally {
+      setFieldLoading(prev => ({ ...prev, [field]: false }));
     }
+  };
 
-    if (draft) {
-      const { campaignTitle, messageContent, recommendedChannel } = draft;
-      if (campaignTitle) setName(campaignTitle);
-      if (messageContent) setMessageTemplate(messageContent);
-      if (recommendedChannel) {
-        const upperChan = recommendedChannel.toUpperCase();
-        if (['WHATSAPP', 'SMS', 'EMAIL', 'RCS'].includes(upperChan)) {
-          setChannel(upperChan as any);
+  const handleSaveDraft = async () => {
+    if (!draft || !selectedSegmentId) return;
+    try {
+      await createCampaign({
+        segmentId: selectedSegmentId,
+        name: draft.campaignName,
+        channel,
+        messageTemplate: draft.messageCopy,
+        metadataJson: {
+          objective: draft.objective,
+          ctaText: draft.ctaText,
+          recommendedSendTime: draft.recommendedSendTime,
+          reasoning: draft.reasoning
         }
-      }
-      if (segments && segments.length > 0 && !selectedSegmentId) {
-        setSelectedSegmentId(segments[0].id);
-      }
-      setSaveMsg({ type: 'success', text: 'Campaign draft loaded successfully' });
-      const timer = setTimeout(() => setSaveMsg(null), 4000);
-      return () => clearTimeout(timer);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.state, segments]);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaveMsg(null);
-    if (!name.trim()) { setSaveMsg({ type: 'error', text: 'Campaign name is required.' }); return; }
-    if (!selectedSegmentId) { setSaveMsg({ type: 'error', text: 'Please select a target segment.' }); return; }
-    if (!messageTemplate.trim()) { setSaveMsg({ type: 'error', text: 'Message template is required.' }); return; }
-
-    try {
-      await createCampaign({ segmentId: selectedSegmentId, name, channel, messageTemplate });
-      setName('');
-      setMessageTemplate('');
-      setSaveMsg({ type: 'success', text: 'Campaign created! Find it in the list and click Launch.' });
-      try {
-        sessionStorage.removeItem('pendingCampaignDraft');
-      } catch {}
-      refetchCampaigns();
-    } catch (error: any) {
-      setSaveMsg({ type: 'error', text: error.message || 'Failed to create campaign.' });
-    }
-  };
-
-  const handleLaunch = async (campaignId: string) => {
-    setActionLoadingId(campaignId);
-    setLaunchMsg(null);
-    try {
-      const res = await launchCampaign(campaignId);
-      setLaunchMsg({ 
-        id: campaignId, 
-        type: 'success', 
-        text: `Launched! ${res.jobsDispatched.toLocaleString()} messages dispatched.` 
       });
+      setDraft(null);
+      setGoalPreset('');
+      setCustomGoal('');
+      setSaveMsg({ type: 'success', text: 'Campaign drafted successfully. Launch it from the grid below.' });
+      setTimeout(() => setSaveMsg(null), 4000);
       refetchCampaigns();
-    } catch (error: any) {
-      setLaunchMsg({ id: campaignId, type: 'error', text: error.message || 'Launch failed.' });
-    } finally {
-      setActionLoadingId(null);
+      refetchSummaries();
+    } catch (err: any) {
+      setDraftError(err.message || 'Failed to save campaign.');
     }
   };
 
-  const handleCancel = async (campaignId: string) => {
-    setActionLoadingId(campaignId);
+  const handleLaunch = async (id: string) => {
+    setActionLoadingId(id);
     try {
-      await cancelCampaign(campaignId);
+      await launchCampaign(id);
       refetchCampaigns();
-    } catch (error: any) {
-      // silent
+      refetchSummaries();
+      setExpandedCampaign(id); // Auto-expand to show Live Progress Panel
+    } catch (err) {
+      console.error(err);
     } finally {
       setActionLoadingId(null);
     }
   };
 
-  const getBadgeVariant = (status: string): 'success' | 'purple' | 'warning' | 'danger' | 'info' => {
-    switch (status.toUpperCase()) {
-      case 'COMPLETED': return 'success';
-      case 'RUNNING': return 'purple';
-      case 'DRAFT': return 'info';
-      case 'CANCELLED': return 'warning';
-      default: return 'danger';
+  const handleCancel = async (id: string) => {
+    setActionLoadingId(id);
+    try {
+      await cancelCampaign(id);
+      refetchCampaigns();
+      refetchSummaries();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  const loadInsights = async (campaignId: string, forceRefresh = false) => {
+    setInsightsLoading(prev => ({ ...prev, [campaignId]: true }));
+    try {
+      const res = await getCampaignPostLaunchInsights(campaignId, forceRefresh);
+      setInsights(prev => ({ ...prev, [campaignId]: res }));
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setInsightsLoading(prev => ({ ...prev, [campaignId]: false }));
+    }
+  };
+
+  const toggleCampaignExpansion = (campaignId: string, status: string) => {
+    if (expandedCampaign === campaignId) {
+      setExpandedCampaign(null);
+    } else {
+      setExpandedCampaign(campaignId);
+      if (status === 'COMPLETED' && !insights[campaignId]) {
+        loadInsights(campaignId);
+      }
     }
   };
 
@@ -174,373 +306,366 @@ export const Campaigns: React.FC = () => {
     WHATSAPP: 'WhatsApp', SMS: 'SMS', EMAIL: 'Email', RCS: 'RCS'
   };
 
-  // Live text placeholder replacement for client previews
-  const getRenderedPreviewText = () => {
-    if (!messageTemplate.trim()) return 'Live preview of message template content...';
-    return messageTemplate.replace(/\{\{firstName\}\}/g, 'John');
-  };
+  // Build enriched campaign list combining base campaigns with summary metrics
+  const enrichedCampaigns = useMemo(() => {
+    if (!campaigns || !campaignSummaries) return campaigns || [];
+    return campaigns.map(camp => {
+      const summary = campaignSummaries.find((s: any) => s.id === camp.id);
+      if (summary) {
+        const cost = summary.sent * (channel === 'WHATSAPP' ? 0.8 : channel === 'SMS' ? 0.2 : 0.05);
+        const roi = cost > 0 ? ((summary.revenue - cost) / cost) * 100 : 0;
+        const ctr = summary.delivered > 0 ? (summary.clicked / summary.delivered) * 100 : 0;
+        return { ...camp, ...summary, roi, ctrCalc: ctr };
+      }
+      return camp;
+    });
+  }, [campaigns, campaignSummaries, channel]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', paddingBottom: '40px' }}>
       
-      {/* 1. Campaign Creator and Mockup grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: '16px', alignItems: 'stretch' }}>
+      {/* BUILDER SECTION */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 2fr', gap: '20px', alignItems: 'stretch' }} className="campaign-builder-grid">
         
-        {/* Creator Form */}
-        <PremiumGlassCard className="card">
-          <h3 className="text-subheading font-semibold" style={{ marginBottom: '12px' }}>Configure Campaign</h3>
-          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+        {/* LEFT COL: Phase 1 Context + Advisor */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          
+          <PremiumGlassCard className="card">
+            <h3 className="text-subheading font-semibold mb-4">1. Campaign Context</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div>
-                <label className="form-label" style={{ fontSize: '9px' }}>Campaign Name</label>
-                <input 
-                  type="text" 
-                  className="form-input"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Enter campaign name"
-                />
+                <label className="form-label" style={{ fontSize: '11px', marginBottom: '6px' }}>Target Segment</label>
+                <select 
+                  className="form-select" 
+                  style={{ width: '100%', maxWidth: '100%', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }} 
+                  value={selectedSegmentId} 
+                  onChange={(e) => setSelectedSegmentId(e.target.value)} 
+                  disabled={draftLoading || segments?.length === 0}
+                >
+                  <option value="">— Choose Audience —</option>
+                  {segments && segments.length > 0 ? (
+                    segments.map(seg => <option key={seg.id} value={seg.id}>{seg.name}</option>)
+                  ) : (
+                    <option value="" disabled>No segments found. Please create one.</option>
+                  )}
+                </select>
               </div>
 
               <div>
-                <label className="form-label" style={{ fontSize: '9px' }}>Target Segment Group</label>
-                {loadingSegments ? (
-                  <p style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: '4px' }}>Loading segments...</p>
-                ) : (!segments || segments.length === 0) ? (
-                  <p style={{ color: 'var(--danger)', fontSize: '11px', marginTop: '4px' }}>
-                    No segments found.
-                  </p>
-                ) : (
-                  <select
-                    className="form-select"
-                    value={selectedSegmentId}
-                    onChange={(e) => setSelectedSegmentId(e.target.value)}
-                  >
-                    <option value="">— Choose Target —</option>
-                    {segments.map(seg => (
-                      <option key={seg.id} value={seg.id}>{seg.name}</option>
-                    ))}
-                  </select>
+                <label className="form-label" style={{ fontSize: '11px', marginBottom: '6px' }}>Channel</label>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  {(['WHATSAPP', 'SMS', 'EMAIL', 'RCS'] as const).map((chan) => (
+                    <button
+                      key={chan} type="button" className="btn btn-sm"
+                      style={{ 
+                        flexGrow: 1, 
+                        background: channel === chan ? 'var(--bg-surface-elevated)' : 'transparent',
+                        color: channel === chan ? 'var(--accent-blue)' : 'var(--text-muted)',
+                        border: `1px solid ${channel === chan ? 'var(--accent-blue)' : 'rgba(255,255,255,0.06)'}`,
+                      }}
+                      onClick={() => setChannel(chan)} disabled={draftLoading}
+                    >
+                      {channelLabels[chan]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="form-label" style={{ fontSize: '11px', marginBottom: '6px' }}>Campaign Goal</label>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
+                  {GOAL_PRESETS.map(goal => (
+                    <button
+                      key={goal} className="badge"
+                      style={{
+                        cursor: 'pointer', padding: '4px 10px',
+                        background: goalPreset === goal ? 'rgba(34,211,238,0.1)' : 'rgba(255,255,255,0.03)',
+                        color: goalPreset === goal ? 'var(--accent-cyan)' : 'var(--text-muted)',
+                        border: `1px solid ${goalPreset === goal ? 'rgba(34,211,238,0.3)' : 'transparent'}`
+                      }}
+                      onClick={() => setGoalPreset(goal)} disabled={draftLoading}
+                    >
+                      {goal}
+                    </button>
+                  ))}
+                </div>
+                {goalPreset === 'Custom Goal' && (
+                  <input type="text" className="form-input" placeholder="Describe specific goal..." value={customGoal} onChange={e => setCustomGoal(e.target.value)} disabled={draftLoading} />
                 )}
               </div>
-            </div>
 
-            <div>
-              <label className="form-label" style={{ fontSize: '9px' }}>Communication Channel</label>
-              <div style={{ display: 'flex', gap: '6px' }}>
-                {(['WHATSAPP', 'SMS', 'EMAIL', 'RCS'] as const).map((chan) => (
-                  <button
-                    key={chan}
-                    type="button"
-                    className="btn btn-sm"
-                    style={{ 
-                      flexGrow: 1, 
-                      fontSize: '11px',
-                      background: channel === chan ? 'var(--bg-surface-elevated)' : 'transparent',
-                      color: channel === chan ? 'var(--accent-blue)' : 'var(--text-muted)',
-                      border: `1px solid ${channel === chan ? 'var(--accent-blue)' : 'rgba(255,255,255,0.06)'}`,
-                      fontWeight: channel === chan ? '600' : '400'
-                    }}
-                    onClick={() => setChannel(chan)}
-                  >
-                    {channelLabels[chan]}
-                  </button>
-                ))}
-              </div>
-            </div>
+              <button className="btn btn-primary" style={{ width: '100%', marginTop: '8px' }} disabled={!selectedSegmentId || !channel || !activeGoal || draftLoading} onClick={handleGenerateDraft}>
+                {draftLoading ? 'Generating Campaign...' : draft ? 'Regenerate Campaign' : 'Generate Campaign via AI'}
+              </button>
 
-            <div>
-              <label className="form-label" style={{ fontSize: '9px' }}>Message Template</label>
-              <textarea
-                className="form-input"
-                style={{ height: '70px', resize: 'vertical', fontSize: '12px', lineHeight: 1.4 }}
-                value={messageTemplate}
-                onChange={(e) => setMessageTemplate(e.target.value)}
-                placeholder="Enter campaign message"
-              />
-              <p style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '5px' }}>
-                Use <code style={{ background: 'rgba(255,255,255,0.06)', padding: '1px 5px', borderRadius: '3px', fontSize: '10px' }}>{'{{firstName}}'}</code> for personalization. Example: <em>Hi {'{{firstName}}'}, get 20% off today!</em>
-              </p>
-            </div>
-
-            {saveMsg && (
-              <p style={{ 
-                fontSize: '11px', 
-                color: saveMsg.type === 'success' ? 'var(--success)' : 'var(--danger)',
-                padding: '6px 10px',
-                background: saveMsg.type === 'success' ? 'rgba(34,197,94,0.07)' : 'rgba(239,68,68,0.07)',
-                borderRadius: '4px',
-                border: `1px solid ${saveMsg.type === 'success' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)'}`,
-                margin: 0
-              }}>
-                {saveMsg.text}
-              </p>
-            )}
-
-            <button 
-              type="submit" 
-              className="btn btn-primary btn-sm"
-              disabled={!selectedSegmentId || loadingSegments}
-              style={{ width: 'fit-content', alignSelf: 'flex-end', marginTop: '4px' }}
-            >
-              Save Campaign Draft
-            </button>
-          </form>
-        </PremiumGlassCard>
-
-        {/* Right Column Stack */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {/* Live Client Preview Mockups */}
-          <PremiumGlassCard className="card" style={{ display: 'flex', flexDirection: 'column', minHeight: '272px', flexGrow: 1 }}>
-            <h3 className="text-subheading font-semibold" style={{ marginBottom: '2px' }}>Live Client View</h3>
-            <p className="text-muted" style={{ fontSize: '11px', marginBottom: '12px' }}>Interactive preview on target device.</p>
-            
-            <div style={{ flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
-              {channel === 'WHATSAPP' && (
-                <div className="whatsapp-mockup">
-                  <div className="whatsapp-header">
-                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981' }}></span>
-                    Xeno Business
-                  </div>
-                  <div className="whatsapp-body">
-                    <div className="whatsapp-bubble">
-                      {getRenderedPreviewText()}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {channel === 'SMS' && (
-                <div className="sms-mockup">
-                  <div className="sms-header">
-                    Xeno Alert
-                  </div>
-                  <div className="sms-body">
-                    <div className="sms-bubble">
-                      {getRenderedPreviewText()}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {channel === 'EMAIL' && (
-                <div className="email-mockup">
-                  <div className="email-header">
-                    <div><strong>From:</strong> newsletter@xeno-crm.com</div>
-                    <div><strong>Subject:</strong> Exclusive VIP Offer</div>
-                  </div>
-                  <div className="email-body">
-                    {getRenderedPreviewText()}
-                  </div>
-                </div>
-              )}
-
-              {channel === 'RCS' && (
-                <div className="rcs-mockup">
-                  <div className="rcs-header">
-                    Xeno Verified
-                  </div>
-                  <div className="rcs-body">
-                    <div className="rcs-card">
-                      <div style={{ height: '70px', background: '#303134', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#666', borderBottom: '1px solid #5f6368', fontSize: '10px' }}>
-                        IMAGE ATTACHMENT
-                      </div>
-                      <div className="rcs-card-content">
-                        <div className="rcs-card-title">{name || 'RCS Template'}</div>
-                        <div className="rcs-card-desc">{getRenderedPreviewText()}</div>
-                      </div>
-                      <div className="rcs-card-button">
-                        Open App
-                      </div>
-                    </div>
-                  </div>
+              {draftError && (
+                <div style={{ padding: '12px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '12px', color: 'var(--danger)' }}>{draftError}</span>
+                  <button onClick={handleGenerateDraft} className="btn btn-sm" style={{ background: 'var(--danger)', color: '#fff', border: 'none', padding: '4px 12px' }}>Retry</button>
                 </div>
               )}
             </div>
           </PremiumGlassCard>
 
-          {/* Target Audience Estimate */}
-          <PremiumGlassCard className="card" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <h3 className="text-subheading font-semibold">Target Audience Estimate</h3>
+          {/* AI Advisor Panel (Phase 2) */}
+          {selectedSegmentId && channel && channelPerf && previewStats && (
+            <div className="ai-advisor-panel">
+              <div className="ai-advisor-header">
+                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                AI Campaign Advisor
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div className="ai-advisor-metric">
+                  <span className="ai-advisor-metric-label">Predicted Reach</span>
+                  <span className="ai-advisor-metric-value">{formatFullNumber(previewStats.matchedAudience)}</span>
+                </div>
+                <div className="ai-advisor-metric">
+                  <span className="ai-advisor-metric-label">Predicted CTR ({channel})</span>
+                  <span className="ai-advisor-metric-value" style={{ color: 'var(--accent-cyan)' }}>
+                    {formatPercent(channelPerf.find((c: any) => c.channel === channel)?.ctr || 0)}
+                  </span>
+                </div>
+                <div className="ai-advisor-metric">
+                  <span className="ai-advisor-metric-label">Predicted Revenue</span>
+                  <span className="ai-advisor-metric-value" style={{ color: 'var(--success)' }}>
+                    {formatCompactCurrency(previewStats.matchedAudience * (previewStats.averageOrderValue || 0) * ((channelPerf.find((c: any) => c.channel === channel)?.ctr || 0) / 100))}
+                  </span>
+                </div>
+                <div className="ai-advisor-metric">
+                  <span className="ai-advisor-metric-label">Suggested Send Time</span>
+                  <span className="ai-advisor-metric-value" style={{ color: 'var(--accent-purple)', fontSize: '14px', alignSelf: 'flex-start', marginTop: 2 }}>
+                    {draft ? draft.recommendedSendTime : 'Pending Draft...'}
+                  </span>
+                </div>
+              </div>
+              {rationale && (
+                <div className="ai-advisor-explanation">
+                  <strong>Audience Fit:</strong> {rationale.reason}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* RIGHT COL: Phase 3 Editable Draft */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <PremiumGlassCard className="card" style={{ flexGrow: 1, display: 'flex', flexDirection: 'column' }}>
+            <h3 className="text-subheading font-semibold mb-4">2. Review & Refine</h3>
             
-            {previewError && (
-              <div className="alert-error" style={{ fontSize: '12px', margin: 0 }}>{previewError}</div>
-            )}
-
-            {isPreviewLoading && (
-              <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--text-muted)' }}>
-                Calculating audience reach...
-              </div>
-            )}
-
-            {!selectedSegmentId && !isPreviewLoading && (
-              <div style={{ padding: '24px 12px', textAlign: 'center', opacity: 0.8 }}>
-                <p style={{ color: 'var(--text-muted)', fontSize: '12px', lineHeight: 1.4, margin: 0 }}>
-                  Select a target segment group to preview estimated reach, potential revenue, and matching criteria before launching your campaign.
+            {!draft && !draftLoading && (
+              <div style={{ flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.5 }}>
+                <p style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center' }}>
+                  Fill out the context on the left and click Generate.<br/>Your AI-drafted campaign will appear here.
                 </p>
               </div>
             )}
 
-            {selectedSegmentId && !isPreviewLoading && !previewStats && !previewError && (
-              <div style={{ padding: '24px 12px', textAlign: 'center' }}>
-                <p style={{ color: 'var(--text-muted)', fontSize: '12px', margin: 0 }}>
-                  No estimation data available.
-                </p>
+            {draftLoading && (
+              <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '16px' }}>
+                <div className="spinner" style={{ width: '24px', height: '24px', border: '2px solid rgba(255,255,255,0.1)', borderTopColor: 'var(--accent-cyan)', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+                <p style={{ fontSize: '12px', color: 'var(--accent-cyan)', animation: 'pulse 1.5s infinite' }}>Drafting campaign...</p>
               </div>
             )}
 
-            {selectedSegmentId && !isPreviewLoading && previewStats && (
-              previewStats.matchedAudience === 0 ? (
-                <div style={{ padding: '24px 12px', textAlign: 'center' }}>
-                  <div style={{ width: '28px', height: '28px', margin: '0 auto 8px auto', color: 'var(--danger)', opacity: 0.8 }}>
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <circle cx="12" cy="12" r="10" />
-                      <line x1="15" y1="9" x2="9" y2="15" />
-                      <line x1="9" y1="9" x2="15" y2="15" />
-                    </svg>
+            {draft && !draftLoading && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', flexGrow: 1 }}>
+                
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  
+                  {['campaignName', 'objective', 'ctaText'].map((f) => (
+                    <div key={f} style={{ position: 'relative' }}>
+                      <label style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block', textTransform: 'capitalize' }}>
+                        {f.replace(/([A-Z])/g, ' $1').trim()}
+                      </label>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <input 
+                          type="text" className="form-input" value={(draft as any)[f]} 
+                          onChange={e => setDraft({...draft, [f]: e.target.value})} 
+                          disabled={fieldLoading[f]} style={{ flexGrow: 1 }}
+                        />
+                        <button 
+                          className="btn btn-sm" onClick={() => handleRegenerateField(f as keyof CampaignDraftAI)}
+                          disabled={fieldLoading[f]} title="Regenerate this field" style={{ padding: '0 12px', background: 'rgba(255,255,255,0.05)' }}
+                        >
+                          {fieldLoading[f] ? '...' : '↻'}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+
+                  <div style={{ position: 'relative' }}>
+                    <label style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Message Copy</label>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                      <textarea 
+                        className="form-input" value={draft.messageCopy} 
+                        onChange={e => setDraft({...draft, messageCopy: e.target.value})} 
+                        disabled={fieldLoading['messageCopy']} style={{ flexGrow: 1, minHeight: '80px', resize: 'vertical' }}
+                      />
+                      <button 
+                        className="btn btn-sm" onClick={() => handleRegenerateField('messageCopy')}
+                        disabled={fieldLoading['messageCopy']} title="Regenerate this field" style={{ padding: '0 12px', height: '38px', background: 'rgba(255,255,255,0.05)' }}
+                      >
+                        {fieldLoading['messageCopy'] ? '...' : '↻'}
+                      </button>
+                    </div>
                   </div>
-                  <p style={{ color: 'var(--text-muted)', fontSize: '13px', fontWeight: 500, margin: 0 }}>
-                    No customers match this segment.
+                </div>
+
+                <div style={{ marginTop: 'auto', background: 'rgba(255,255,255,0.02)', padding: '12px', borderRadius: '8px', border: '1px dashed rgba(255,255,255,0.1)' }}>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '4px' }}>AI Reasoning</div>
+                  <p style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.4, margin: 0 }}>
+                    {draft.reasoning}
                   </p>
                 </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  {/* Estimated Reach KPI */}
-                  <div style={{ padding: '12px 14px', background: 'rgba(34,211,238,0.06)', border: '1px solid rgba(34,211,238,0.12)', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                    <span style={{ fontSize: '24px', fontWeight: 700, color: 'var(--accent-cyan)', lineHeight: 1 }}>
-                      {previewStats.matchedAudience.toLocaleString()}
-                    </span>
-                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: '2px' }}>Estimated Reach</span>
-                    
-                    <div style={{ width: '100%', marginTop: '6px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: 'var(--text-muted)', marginBottom: '3px' }}>
-                        <span>Match Share</span>
-                        <span>{matchPercent}% of DB</span>
-                      </div>
-                      <div className="dist-bar-track" style={{ height: '4px', marginBottom: 0 }}>
-                        <div className="dist-bar-fill" style={{ width: `${matchPercent}%`, background: 'var(--accent-cyan)' }}></div>
-                      </div>
-                    </div>
-                  </div>
 
-                  {/* Other metrics */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                    <div style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.01)', border: '1px solid rgba(255,255,255,0.04)', borderRadius: '6px' }}>
-                      <span style={{ fontSize: '8px', color: 'var(--text-muted)', textTransform: 'uppercase', display: 'block' }}>Potential Revenue</span>
-                      <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--accent-emerald)', marginTop: '2px', display: 'block' }}>
-                        {formatPotentialRevenue(previewStats.potentialRevenue)}
-                      </span>
-                    </div>
-                    <div style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.01)', border: '1px solid rgba(255,255,255,0.04)', borderRadius: '6px' }}>
-                      <span style={{ fontSize: '8px', color: 'var(--text-muted)', textTransform: 'uppercase', display: 'block' }}>Top Performing City</span>
-                      <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--accent-indigo)', marginTop: '2px', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {previewStats.topPerformingCity}
-                      </span>
-                    </div>
+                {saveMsg && (
+                  <div style={{ padding: '8px', background: 'rgba(34,197,94,0.1)', color: 'var(--success)', borderRadius: '6px', fontSize: '12px', textAlign: 'center' }}>
+                    {saveMsg.text}
                   </div>
-                </div>
-              )
+                )}
+
+                <button className="btn btn-primary" onClick={handleSaveDraft} style={{ background: 'var(--success)' }}>
+                  Save as Draft
+                </button>
+
+              </div>
             )}
           </PremiumGlassCard>
         </div>
-
       </div>
 
-      {/* 2. Campaigns Data Grid Table */}
-      <PremiumGlassCard className="card">
-        <div style={{ marginBottom: '12px' }}>
-          <h3 className="text-subheading font-semibold">Campaign Metrics Grid</h3>
-          <p className="text-muted" style={{ fontSize: '11px', marginTop: '2px' }}>
-            Execute and review historical performance aggregates of marketing cohorts.
-          </p>
-        </div>
-
+      {/* BOTTOM SECTION: Campaign History */}
+      <PremiumGlassCard className="card" style={{ flexGrow: 1 }}>
+        <h3 className="text-subheading font-semibold mb-4">3. Campaign History</h3>
+        
         {loadingCampaigns ? (
-          <p className="text-body text-muted">Loading campaigns...</p>
-        ) : (!campaigns || campaigns.length === 0) ? (
-          <BrandedEmptyState
-            title="No campaigns yet"
-            description="Use the creator form to build your first campaign draft."
-          />
+          <p className="text-muted text-center py-8">Loading history...</p>
+        ) : !enrichedCampaigns?.length ? (
+          <div style={{ padding: '20px' }}>
+            <BrandedEmptyState title="No Campaigns Yet" description="Draft and launch your first AI campaign above." />
+          </div>
         ) : (
-          <div className="table-container" style={{ maxHeight: '280px' }}>
-            <DataTable
-              columns={[
-                { key: 'name', label: 'Campaign' },
-                { key: 'channel', label: 'Channel' },
-                { key: 'audienceSize', label: 'Audience' },
-                { key: 'status', label: 'Status' },
-                { key: 'delivery', label: 'Delivery %' },
-                { key: 'engagement', label: 'Engagement %' },
-                { key: 'actions', label: '' },
-              ]}
-              data={campaigns}
-              renderRow={(item, idx) => {
-                const isDRAFT = item.status === 'DRAFT';
-                let deliveryStr = '—';
-                let engagementStr = '—';
-                if (!isDRAFT) {
-                  if (item.channel === 'WHATSAPP') { deliveryStr = '98.2%'; engagementStr = '72.4% Read'; }
-                  else if (item.channel === 'EMAIL') { deliveryStr = '99.1%'; engagementStr = '28.5% Open'; }
-                  else if (item.channel === 'SMS') { deliveryStr = '96.8%'; engagementStr = '12.4% Click'; }
-                  else { deliveryStr = '97.5%'; engagementStr = '45.2% Read'; }
-                }
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 2fr 1.5fr', padding: '12px', borderBottom: '1px solid rgba(255,255,255,0.1)', color: 'var(--text-muted)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              <div>Campaign</div>
+              <div>Channel</div>
+              <div>Audience</div>
+              <div>Performance metrics</div>
+              <div style={{ textAlign: 'right' }}>Actions</div>
+            </div>
 
-                return (
-                  <tr key={idx}>
-                    <td>
-                      <div className="font-semibold" style={{ fontSize: '13px' }}>{item.name}</div>
-                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                        {new Date(item.createdAt).toLocaleDateString()}
-                      </div>
-                    </td>
-                    <td>
-                      <span className={`channel-tag channel-tag-${item.channel.toLowerCase()}`}>
-                        {channelLabels[item.channel] || item.channel}
-                      </span>
-                    </td>
-                    <td>
-                      <span className="font-medium">{item.audienceSize.toLocaleString()}</span>
-                    </td>
-                    <td>
-                      <Badge variant={getBadgeVariant(item.status)}>{item.status}</Badge>
-                    </td>
-                    <td style={{ color: 'var(--text-muted)' }}>{deliveryStr}</td>
-                    <td style={{ color: 'var(--text-muted)' }}>{engagementStr}</td>
-                    <td>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                        {item.status === 'DRAFT' && (
-                          <button 
-                            className="btn btn-primary btn-sm"
-                            onClick={() => handleLaunch(item.id)}
-                            disabled={actionLoadingId === item.id}
-                            style={{ height: '24px', fontSize: '11px' }}
-                          >
-                            {actionLoadingId === item.id ? 'Launching...' : 'Launch'}
+            {enrichedCampaigns.map((camp: any) => (
+              <div key={camp.id} style={{ background: expandedCampaign === camp.id ? 'rgba(255,255,255,0.03)' : 'transparent', borderRadius: '8px', border: expandedCampaign === camp.id ? '1px solid rgba(255,255,255,0.1)' : '1px solid transparent', overflow: 'hidden', transition: 'all 0.2s' }}>
+                
+                {/* Enriched Row */}
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 2fr 1.5fr', padding: '16px 12px', alignItems: 'center' }}>
+                  <div>
+                    <div className="font-semibold" style={{ fontSize: '13px' }}>{camp.name}</div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                      {new Date(camp.createdAt).toLocaleDateString()}
+                      {camp.status !== 'DRAFT' && camp.status !== 'CANCELLED' && (
+                        <span style={{ marginLeft: 6, display: 'inline-block', transform: 'scale(0.8)', transformOrigin: 'left' }}>
+                          <Badge variant={camp.status === 'COMPLETED' ? 'success' : 'purple'}>{camp.status}</Badge>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div><span className={`channel-tag channel-tag-${camp.channel.toLowerCase()}`}>{channelLabels[camp.channel]}</span></div>
+                  <div><span className="font-medium" style={{ fontSize: '13px' }}>{formatFullNumber(camp.audienceSize)}</span></div>
+                  
+                  {/* Phase 4 Enriched Metrics Column */}
+                  <div className="camp-enriched-metrics">
+                    {camp.status === 'DRAFT' || camp.status === 'CANCELLED' ? (
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Not launched</span>
+                    ) : (
+                      <>
+                        <div className={`camp-enriched-chip ${(camp.roi > 0 ? 'positive' : camp.roi < 0 ? 'negative' : 'neutral')}`}>
+                          ROI: {camp.roi > 0 ? '+' : ''}{camp.roi?.toFixed(0)}%
+                        </div>
+                        <div className="camp-enriched-chip neutral">
+                          Rev: {formatCompactCurrency(camp.revenue || 0)}
+                        </div>
+                        <div className="camp-enriched-chip neutral">
+                          CTR: {formatPercent(camp.ctrCalc || 0)}
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                    {camp.status === 'DRAFT' && (
+                      <button className="btn btn-sm btn-primary" onClick={() => handleLaunch(camp.id)} disabled={actionLoadingId === camp.id}>
+                        {actionLoadingId === camp.id ? 'Launching...' : 'Launch'}
+                      </button>
+                    )}
+                    {camp.status === 'RUNNING' && (
+                      <button className="btn btn-sm" style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }} onClick={() => handleCancel(camp.id)} disabled={actionLoadingId === camp.id}>
+                        Cancel
+                      </button>
+                    )}
+                    {(camp.status === 'COMPLETED' || camp.status === 'RUNNING') && (
+                      <button className="btn btn-sm" style={{ background: 'rgba(255,255,255,0.05)' }} onClick={() => toggleCampaignExpansion(camp.id, camp.status)}>
+                        {expandedCampaign === camp.id ? 'Close' : camp.status === 'COMPLETED' ? 'View Insights' : 'Live Progress'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Expanded Drawer */}
+                {expandedCampaign === camp.id && (
+                  <div style={{ borderTop: '1px solid rgba(255,255,255,0.05)', background: 'rgba(0,0,0,0.2)' }}>
+                    
+                    {camp.status === 'RUNNING' && (
+                      <LiveProgressPanel campaignId={camp.id} />
+                    )}
+
+                    {camp.status === 'COMPLETED' && (
+                      <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <h4 style={{ fontSize: '13px', fontWeight: 600, color: 'var(--accent-cyan)' }}>Post-Launch AI Insights</h4>
+                          <button className="btn btn-sm" onClick={() => loadInsights(camp.id, true)} disabled={insightsLoading[camp.id]} style={{ background: 'rgba(255,255,255,0.05)', fontSize: '11px', padding: '4px 10px' }}>
+                            {insightsLoading[camp.id] ? 'Refreshing...' : '↻ Refresh Insights'}
                           </button>
-                        )}
-                        {item.status === 'RUNNING' && (
-                          <button 
-                            className="btn btn-sm"
-                            style={{ color: 'var(--danger)', borderColor: 'rgba(239,68,68,0.3)', height: '24px', fontSize: '11px' }}
-                            onClick={() => handleCancel(item.id)}
-                            disabled={actionLoadingId === item.id}
-                          >
-                            {actionLoadingId === item.id ? 'Stopping...' : 'Cancel'}
-                          </button>
-                        )}
-                        {launchMsg && launchMsg.id === item.id && (
-                          <span style={{ fontSize: '10px', color: launchMsg.type === 'success' ? 'var(--success)' : 'var(--danger)', marginTop: '2px' }}>
-                            {launchMsg.text}
-                          </span>
+                        </div>
+
+                        {insightsLoading[camp.id] && !insights[camp.id] ? (
+                          <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>Analyzing campaign data...</div>
+                        ) : insights[camp.id] ? (
+                          <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '24px' }}>
+                            <div>
+                              <div style={{ marginBottom: '16px' }}>
+                                <div style={{ fontSize: '10px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '4px' }}>Performance Summary</div>
+                                <p style={{ fontSize: '12px', color: 'var(--text-primary)', lineHeight: 1.5 }}>{insights[camp.id].performanceSummary}</p>
+                              </div>
+                              <div>
+                                <div style={{ fontSize: '10px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '6px' }}>Optimization Recommendations</div>
+                                <ul style={{ margin: 0, paddingLeft: '16px', fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                  {insights[camp.id].optimizationRecommendations?.map((rec, i) => (
+                                    <li key={i}>{rec}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                              <div style={{ background: 'rgba(34,197,94,0.05)', padding: '12px', borderRadius: '8px', border: '1px solid rgba(34,197,94,0.1)' }}>
+                                <div style={{ fontSize: '10px', textTransform: 'uppercase', color: 'var(--success)', marginBottom: '4px', fontWeight: 600 }}>Next Best Campaign</div>
+                                <p style={{ fontSize: '12px', color: 'var(--text-primary)', margin: 0, lineHeight: 1.4 }}>{insights[camp.id].nextBestCampaign}</p>
+                              </div>
+                              <div style={{ background: 'rgba(168,85,247,0.05)', padding: '12px', borderRadius: '8px', border: '1px solid rgba(168,85,247,0.1)' }}>
+                                <div style={{ fontSize: '10px', textTransform: 'uppercase', color: 'var(--accent-purple)', marginBottom: '4px', fontWeight: 600 }}>Audience Expansion</div>
+                                <p style={{ fontSize: '12px', color: 'var(--text-primary)', margin: 0, lineHeight: 1.4 }}>{insights[camp.id].audienceExpansion}</p>
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{ color: 'var(--danger)', fontSize: '12px' }}>Failed to load insights.</div>
                         )}
                       </div>
-                    </td>
-                  </tr>
-                );
-              }}
-            />
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         )}
       </PremiumGlassCard>

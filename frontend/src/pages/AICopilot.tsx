@@ -14,6 +14,7 @@ import {
   fetchCustomerAnalytics
 } from '../services/api';
 import { PremiumGlassCard } from '../components/PremiumGlassCard';
+import { BrandedEmptyState } from '../components/BrandedEmptyState';
 
 interface SegmentCardData {
   rules: any;
@@ -115,8 +116,9 @@ export const AICopilot: React.FC = () => {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   
-  // Greeting card text (null if dismissed or none active)
   const [greetingMessage, setGreetingMessage] = useState<string | null>(null);
+  const [globalLoading, setGlobalLoading] = useState(true);
+  const [globalError, setGlobalError] = useState<string | null>(null);
 
   // AI Workspace Results States
   const [segmentResult, setSegmentResult] = useState<SegmentCardData | null>(null);
@@ -124,100 +126,83 @@ export const AICopilot: React.FC = () => {
   const [insightsResult, setInsightsResult] = useState<InsightsCardData | null>(null);
   const [optimizationResult, setOptimizationResult] = useState<OptimizationCardData | null>(null);
 
-  // Performance default state
-  const [defaultStats, setDefaultStats] = useState<{
+  // Performance explicit state (no fake defaults)
+  const [activeStats, setActiveStats] = useState<{
     topCampaign: string;
     bestChannel: string;
     avgCtr: string;
     deliveryRate: string;
     readRate: string;
-  }>({
-    topCampaign: 'Loading...',
-    bestChannel: 'Loading...',
-    avgCtr: '...',
-    deliveryRate: '...',
-    readRate: '...',
-  });
+  } | null>(null);
 
   const [totalClientBase, setTotalClientBase] = useState<number>(10000);
 
-  // Default system recommendations styled as Priority/Impact/Recommendation/Expected Gain cards
-  const defaultOptimizations = [
-    { priority: 'High' as const, impact: '+12.4% CTR', recommendation: 'Pre-populate templates with variable tokens like {{firstName}} to boost click ratios.', expectedGain: '₹45,000 spend' },
-    { priority: 'High' as const, impact: '+8.2% Read', recommendation: 'Transmit WhatsApp newsletters mid-morning (10:30 AM) when user engagement peaks.', expectedGain: '₹28,000 spend' },
-    { priority: 'Medium' as const, impact: '+14.5% Conv', recommendation: 'Re-engage inactive customers with zero orders in 90 days offering a promo coupon.', expectedGain: '₹62,000 spend' }
-  ];
-
   // Quick Action Command suggestions (full width Row 1)
   const suggestions = [
-    { label: 'Find High Value Customers', query: 'Find customers who spent more than 10000' },
-    { label: 'Create Re-engagement Campaign', query: 'Create a WhatsApp re-engagement campaign offering free shipping on electronics' },
-    { label: 'Analyze Campaign Performance', query: 'Analyze campaign performance' },
-    { label: 'Improve CTR', query: 'How can I optimize the click-through rate of campaigns?' },
-    { label: 'Generate WhatsApp Campaign', query: 'Create a WhatsApp campaign for inactive users' }
+    { label: 'Summarize Best Campaign', query: 'Analyze campaign performance' },
+    { label: 'Recommend Next Campaign', query: 'Create a campaign based on our best performing segment' },
+    { label: 'Find Best Audience', query: 'Find customers from our highest revenue segment' },
+    { label: 'Explain Performance', query: 'How can I optimize the click-through rate of campaigns?' }
   ];
 
-  // Load baseline aggregates on mount
-  useEffect(() => {
-    const fetchDefaults = async () => {
-      try {
-        const [campaignsList, channelsList, custData] = await Promise.all([
-          listCampaigns().catch(() => []),
-          fetchChannelPerformance().catch(() => []),
-          fetchCustomerAnalytics().catch(() => null)
-        ]);
+  const fetchDefaults = async () => {
+    setGlobalLoading(true);
+    setGlobalError(null);
+    try {
+      const [campaignsList, channelsList, custData] = await Promise.all([
+        listCampaigns(),
+        fetchChannelPerformance(),
+        fetchCustomerAnalytics()
+      ]);
 
-        if (custData) {
-          setTotalClientBase(custData.totalCustomers);
-        }
+      if (custData) {
+        setTotalClientBase(custData.totalCustomers);
+      }
 
-        const launched = campaignsList.filter(c => c.status !== 'DRAFT');
-        const topCampName = launched.length > 0 
-          ? launched.reduce((prev, current) => (prev.audienceSize > current.audienceSize) ? prev : current).name 
-          : 'Spring Loyalty Promo';
+      const launched = campaignsList.filter(c => c.status !== 'DRAFT');
+      const topCampName = launched.length > 0 
+        ? launched.reduce((prev, current) => (prev.audienceSize > current.audienceSize) ? prev : current).name 
+        : 'N/A';
 
-        let bestChanName = 'WhatsApp';
-        let maxCtr = 0;
-        let totalSent = 0;
-        let totalDelivered = 0;
-        let totalRead = 0;
-        let totalClicked = 0;
+      let bestChanName = 'N/A';
+      let maxCtr = 0;
+      let totalSent = 0;
+      let totalDelivered = 0;
+      let totalRead = 0;
+      let totalClicked = 0;
 
-        if (channelsList && channelsList.length > 0) {
-          channelsList.forEach(chan => {
-            if (chan.ctr > maxCtr) {
-              maxCtr = chan.ctr;
-              bestChanName = chan.channel;
-            }
-            totalSent += chan.sent;
-            totalDelivered += chan.delivered;
-            totalRead += (chan.read + chan.opened);
-            totalClicked += chan.clicked;
-          });
-        }
-
-        const calculatedCtr = totalDelivered > 0 ? (totalClicked / totalDelivered) * 100 : 4.8;
-        const calculatedDeliv = totalSent > 0 ? (totalDelivered / totalSent) * 100 : 98.2;
-        const calculatedRead = totalDelivered > 0 ? (totalRead / totalDelivered) * 100 : 72.4;
-
-        setDefaultStats({
-          topCampaign: stripEmojis(topCampName),
-          bestChannel: stripEmojis(bestChanName.toUpperCase() === 'WHATSAPP' ? 'WhatsApp' : bestChanName),
-          avgCtr: `${calculatedCtr.toFixed(1)}%`,
-          deliveryRate: `${calculatedDeliv.toFixed(1)}%`,
-          readRate: `${calculatedRead.toFixed(1)}%`,
-        });
-      } catch (err) {
-        setDefaultStats({
-          topCampaign: 'Spring Loyalty Promo',
-          bestChannel: 'WhatsApp',
-          avgCtr: '4.8%',
-          deliveryRate: '98.2%',
-          readRate: '72.4%',
+      if (channelsList && channelsList.length > 0) {
+        channelsList.forEach(chan => {
+          if (chan.ctr > maxCtr) {
+            maxCtr = chan.ctr;
+            bestChanName = chan.channel;
+          }
+          totalSent += chan.sent;
+          totalDelivered += chan.delivered;
+          totalRead += (chan.read + chan.opened);
+          totalClicked += chan.clicked;
         });
       }
-    };
 
+      const calculatedCtr = totalDelivered > 0 ? (totalClicked / totalDelivered) * 100 : 0;
+      const calculatedDeliv = totalSent > 0 ? (totalDelivered / totalSent) * 100 : 0;
+      const calculatedRead = totalDelivered > 0 ? (totalRead / totalDelivered) * 100 : 0;
+
+      setActiveStats({
+        topCampaign: stripEmojis(topCampName),
+        bestChannel: stripEmojis(bestChanName.toUpperCase() === 'WHATSAPP' ? 'WhatsApp' : bestChanName),
+        avgCtr: `${calculatedCtr.toFixed(1)}%`,
+        deliveryRate: `${calculatedDeliv.toFixed(1)}%`,
+        readRate: `${calculatedRead.toFixed(1)}%`,
+      });
+    } catch (err: any) {
+      setGlobalError(err.message || 'Failed to connect to backend.');
+    } finally {
+      setGlobalLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchDefaults();
   }, []);
 
@@ -284,10 +269,10 @@ export const AICopilot: React.FC = () => {
 
         setCampaignResult({
           payload: campaign,
-          title: stripEmojis(campaign.campaignTitle),
-          objective: stripEmojis(campaign.campaignObjective),
-          channel: channelDisplay[campaign.recommendedChannel] || campaign.recommendedChannel,
-          message: stripEmojis(campaign.messageContent),
+          title: stripEmojis(campaign.campaignTitle || campaign.campaignName || ''),
+          objective: stripEmojis(campaign.campaignObjective || campaign.objective || ''),
+          channel: channelDisplay[campaign.recommendedChannel || ''] || campaign.recommendedChannel || 'SMS',
+          message: stripEmojis(campaign.messageContent || campaign.messageCopy || ''),
           prompt: prompt,
         });
       } else if (intent === 'ANALYTICS_INSIGHT') {
@@ -372,15 +357,39 @@ export const AICopilot: React.FC = () => {
     navigate('/campaigns', { state: { campaign } });
   };
 
-  const activeStats = insightsResult?.metrics || defaultStats;
+  const displayStats = insightsResult?.metrics || activeStats;
 
   // Segment matched values
   const segMatchPercent = segmentResult 
     ? ((segmentResult.audienceCount / totalClientBase) * 100).toFixed(1)
     : '0.0';
 
-  const segCityRule = segmentResult?.humanRules.find(r => r.label === 'City')?.value || 'Mumbai';
-  const segSpendLimit = segmentResult?.humanRules.find(r => r.label === 'Total Spend')?.value || 'INR 5,000';
+  const segCityRule = segmentResult?.humanRules.find(r => r.label === 'City')?.value || 'N/A';
+  const segSpendLimit = segmentResult?.humanRules.find(r => r.label === 'Total Spend')?.value || 'N/A';
+
+  if (globalLoading) {
+    return (
+      <div className="assistant-workspace">
+        <BrandedEmptyState 
+          title="Initializing Copilot..." 
+          description="Connecting to CRM intelligence network and synchronizing data." 
+        />
+      </div>
+    );
+  }
+
+  if (globalError) {
+    return (
+      <div className="assistant-workspace">
+        <BrandedEmptyState 
+          title="Connection Error" 
+          description={globalError} 
+          actionText="Retry Connection"
+          onAction={fetchDefaults}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="assistant-workspace">
@@ -637,53 +646,57 @@ export const AICopilot: React.FC = () => {
           </div>
           
           <div className="workspace-card-body">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', height: '100%' }}>
-              
-              {/* Trend card layout */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                <div className="card surface-level-3" style={{ padding: '8px 10px', border: '1px solid rgba(255,255,255,0.03)' }}>
-                  <span className="text-label" style={{ fontSize: '7px' }}>Top Operations Campaign</span>
-                  <span style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: 'var(--accent-indigo)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {activeStats.topCampaign}
-                  </span>
+            {displayStats ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', height: '100%' }}>
+                
+                {/* Trend card layout */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                  <div className="card surface-level-3" style={{ padding: '8px 10px', border: '1px solid rgba(255,255,255,0.03)' }}>
+                    <span className="text-label" style={{ fontSize: '7px' }}>Top Operations Campaign</span>
+                    <span style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: 'var(--accent-indigo)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {displayStats.topCampaign}
+                    </span>
+                  </div>
+                  <div className="card surface-level-3" style={{ padding: '8px 10px', border: '1px solid rgba(255,255,255,0.03)' }}>
+                    <span className="text-label" style={{ fontSize: '7px' }}>Best Performing Channel</span>
+                    <span style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: 'var(--accent-cyan)' }}>
+                      {displayStats.bestChannel}
+                    </span>
+                  </div>
                 </div>
-                <div className="card surface-level-3" style={{ padding: '8px 10px', border: '1px solid rgba(255,255,255,0.03)' }}>
-                  <span className="text-label" style={{ fontSize: '7px' }}>Best Performing Channel</span>
-                  <span style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: 'var(--accent-cyan)' }}>
-                    {activeStats.bestChannel}
-                  </span>
-                </div>
-              </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', borderTop: '1px solid rgba(255,255,255,0.04)', paddingTop: '8px' }}>
-                <div className="card surface-level-3" style={{ padding: '6px 8px', textAlign: 'center' }}>
-                  <span className="text-label" style={{ fontSize: '7px' }}>Average CTR</span>
-                  <span style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: 'var(--accent-emerald)', marginTop: '2px' }}>{activeStats.avgCtr}</span>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', borderTop: '1px solid rgba(255,255,255,0.04)', paddingTop: '8px' }}>
+                  <div className="card surface-level-3" style={{ padding: '6px 8px', textAlign: 'center' }}>
+                    <span className="text-label" style={{ fontSize: '7px' }}>Average CTR</span>
+                    <span style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: 'var(--accent-emerald)', marginTop: '2px' }}>{displayStats.avgCtr}</span>
+                  </div>
+                  <div className="card surface-level-3" style={{ padding: '6px 8px', textAlign: 'center' }}>
+                    <span className="text-label" style={{ fontSize: '7px' }}>Delivery Rate</span>
+                    <span style={{ display: 'block', fontSize: '12px', fontWeight: 700, marginTop: '2px' }}>{displayStats.deliveryRate}</span>
+                  </div>
+                  <div className="card surface-level-3" style={{ padding: '6px 8px', textAlign: 'center' }}>
+                    <span className="text-label" style={{ fontSize: '7px' }}>Read Rate</span>
+                    <span style={{ display: 'block', fontSize: '12px', fontWeight: 700, marginTop: '2px' }}>{displayStats.readRate}</span>
+                  </div>
                 </div>
-                <div className="card surface-level-3" style={{ padding: '6px 8px', textAlign: 'center' }}>
-                  <span className="text-label" style={{ fontSize: '7px' }}>Delivery Rate</span>
-                  <span style={{ display: 'block', fontSize: '12px', fontWeight: 700, marginTop: '2px' }}>{activeStats.deliveryRate}</span>
-                </div>
-                <div className="card surface-level-3" style={{ padding: '6px 8px', textAlign: 'center' }}>
-                  <span className="text-label" style={{ fontSize: '7px' }}>Read Rate</span>
-                  <span style={{ display: 'block', fontSize: '12px', fontWeight: 700, marginTop: '2px' }}>{activeStats.readRate}</span>
-                </div>
-              </div>
 
-              {insightsResult && (
-                <div style={{ borderTop: '1px solid rgba(255,255,255,0.04)', paddingTop: '6px', flexGrow: 1, overflowY: 'auto', maxHeight: '110px' }}>
-                  <span className="text-label" style={{ fontSize: '8px', display: 'block', marginBottom: '2px' }}>AI Comparison Trend</span>
-                  <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    {insightsResult.bullets.map((b, i) => (
-                      <li key={i} style={{ fontSize: '11px', paddingLeft: '12px', position: 'relative', lineHeight: 1.4 }}>
-                        <span style={{ position: 'absolute', left: 0, color: 'var(--accent-blue)' }}>•</span>
-                        {b}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
+                {insightsResult && (
+                  <div style={{ borderTop: '1px solid rgba(255,255,255,0.04)', paddingTop: '6px', flexGrow: 1, overflowY: 'auto', maxHeight: '110px' }}>
+                    <span className="text-label" style={{ fontSize: '8px', display: 'block', marginBottom: '2px' }}>AI Comparison Trend</span>
+                    <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      {insightsResult.bullets.map((b, i) => (
+                        <li key={i} style={{ fontSize: '11px', paddingLeft: '12px', position: 'relative', lineHeight: 1.4 }}>
+                          <span style={{ position: 'absolute', left: 0, color: 'var(--accent-blue)' }}>•</span>
+                          {b}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <BrandedEmptyState title="No Analytics Available" description="Connect channels to generate metrics." />
+            )}
           </div>
 
           {insightsResult && (
@@ -719,18 +732,7 @@ export const AICopilot: React.FC = () => {
                   </div>
                 ))
               ) : (
-                defaultOptimizations.map((opt, idx) => (
-                  <div key={idx} className="card surface-level-3" style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: '4px', border: '1px solid rgba(255,255,255,0.03)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px' }}>
-                      <span className={`badge ${opt.priority === 'High' ? 'badge-danger' : 'badge-warning'}`} style={{ padding: '1px 6px', fontSize: '9px' }}>
-                        {opt.priority} Priority
-                      </span>
-                      <span style={{ color: 'var(--accent-emerald)', fontWeight: 600 }}>{opt.impact} Impact</span>
-                    </div>
-                    <p style={{ fontSize: '11px', color: 'var(--text-primary)', lineHeight: 1.3 }}>{opt.recommendation}</p>
-                    <span className="text-label" style={{ fontSize: '7px', color: 'var(--text-muted)' }}>Expected Gain: {opt.expectedGain}</span>
-                  </div>
-                ))
+                <BrandedEmptyState title="No AI Insights Available" description="Request optimization recommendations using the prompt bar above." />
               )}
 
             </div>

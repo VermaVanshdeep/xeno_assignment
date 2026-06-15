@@ -268,34 +268,261 @@ Important Rules:
   return sanitizeSegmentRule(rawAst);
 }
 
+export interface CampaignDraftInput {
+  segmentName: string;
+  segmentSize: number;
+  channel: 'WHATSAPP' | 'SMS' | 'EMAIL' | 'RCS';
+  goal: string;
+  campaignHistory?: Array<{ name: string; channel: string; status: string }>;
+}
+
 export interface CampaignContent {
-  campaignTitle: string;
-  campaignObjective: string;
-  messageContent: string;
-  recommendedChannel: 'WHATSAPP' | 'SMS' | 'EMAIL' | 'RCS';
+  campaignName: string;
+  objective: string;
+  messageCopy: string;
+  ctaText: string;
+  recommendedSendTime: string;
+  reasoning: string;
+  // Legacy compat aliases
+  campaignTitle?: string;
+  campaignObjective?: string;
+  messageContent?: string;
+  recommendedChannel?: string;
 }
 
 /**
- * Generates campaign templates, objective, and recommends channels.
+ * Generates a full AI campaign draft from segment context, channel, and goal.
+ * No hardcoded fallbacks — throws on failure so the frontend can show a retry.
  */
-export async function generateCampaignContent(prompt: string): Promise<CampaignContent> {
-  const systemInstruction = `
-You are a campaign content writer. Generate creative campaign content from user intent.
+export async function generateCampaignContent(input: CampaignDraftInput | string): Promise<CampaignContent> {
+  // Support legacy string prompt form (from AI Copilot chat path)
+  let systemInstruction: string;
+  let userPrompt: string;
+
+  if (typeof input === 'string') {
+    systemInstruction = `
+You are a campaign content writer for a CRM marketing platform.
+Generate creative campaign content from user intent.
 Your response MUST be a structured JSON object with the following fields:
-- campaignTitle: A short, catchy title for the campaign.
-- campaignObjective: The goal or objective of the campaign.
-- messageContent: The actual body content of the message. Templates should support template variables like {{firstName}} if necessary.
+- campaignName: A short, catchy title for the campaign.
+- objective: The goal or objective of the campaign.
+- messageCopy: The actual body content of the message. Support {{firstName}} for personalization.
+- ctaText: A short call-to-action button text (max 4 words).
+- recommendedSendTime: Best send time e.g. "Tuesday 10:00 AM" or "Weekend Morning".
+- reasoning: Why these choices suit this audience and channel.
 - recommendedChannel: Recommend exactly one channel: 'WHATSAPP', 'SMS', 'EMAIL', or 'RCS'.
 `;
+    userPrompt = `Generate campaign content for: "${input}"`;
+  } else {
+    const { segmentName, segmentSize, channel, goal, campaignHistory } = input;
+    const historyContext = campaignHistory && campaignHistory.length > 0
+      ? `\nPrevious campaigns for context (avoid repeating these names/angles):\n${campaignHistory.map(c => `- ${c.name} [${c.channel}] — ${c.status}`).join('\n')}`
+      : '';
 
-  const result = await callGroqJson(systemInstruction, `Generate a campaign content based on the following instruction: "${prompt}"`);
-  
-  // Basic structural validation
-  if (!result.campaignTitle || !result.campaignObjective || !result.messageContent || !result.recommendedChannel) {
-    throw new Error("Invalid AI JSON response: missing required campaign fields");
+    systemInstruction = `
+You are an expert CRM campaign strategist for an Indian e-commerce brand.
+Your task is to generate a complete, high-converting marketing campaign.
+Return ONLY a valid JSON object with exactly these fields:
+- campaignName: A unique, punchy, professional campaign name (max 8 words). No generic names like "Campaign 1".
+- objective: The specific marketing objective (1-2 sentences, action-oriented).
+- messageCopy: The full message body. Use {{firstName}} for personalization. Include specific offer details. Must feel personal and urgent. Max 160 chars for SMS, can be longer for WhatsApp/Email.
+- ctaText: A short, action-driven CTA button label (max 4 words, e.g. "Shop Now", "Claim Offer", "Explore Deals").
+- recommendedSendTime: The optimal send time for this goal and channel (e.g. "Tuesday 10:00 AM IST", "Saturday 6:00 PM IST").
+- reasoning: 2-3 sentences explaining why this copy, timing, and angle suit this specific audience and goal.
+
+Rules:
+- Never use placeholder copy like "[Brand Name]" or "[Offer Details]".
+- Never repeat names from campaign history.
+- Message must feel authentic, not robotic.
+- Use Indian market context (₹, IST timings, relevant references).
+`;
+    userPrompt = `Generate a campaign with these parameters:
+- Target Segment: ${segmentName} (${segmentSize.toLocaleString()} customers)
+- Channel: ${channel}
+- Campaign Goal: ${goal}${historyContext}`;
+  }
+
+  const result = await callGroqJson(systemInstruction, userPrompt);
+
+  // Validate all required fields are present
+  const requiredFields = ['campaignName', 'objective', 'messageCopy', 'ctaText', 'recommendedSendTime', 'reasoning'];
+  const missingFields = requiredFields.filter(f => !result[f]);
+  if (missingFields.length > 0) {
+    // If we got legacy field names, map them over
+    if (result.campaignTitle && !result.campaignName) result.campaignName = result.campaignTitle;
+    if (result.campaignObjective && !result.objective) result.objective = result.campaignObjective;
+    if (result.messageContent && !result.messageCopy) result.messageCopy = result.messageContent;
+    // Re-check after mapping
+    const stillMissing = requiredFields.filter(f => !result[f]);
+    if (stillMissing.length > 0) {
+      throw new Error(`AI generation failed: missing fields [${stillMissing.join(', ')}]. Please retry.`);
+    }
   }
 
   return result as CampaignContent;
+}
+
+export interface FieldRegenerationInput {
+  field: 'campaignName' | 'objective' | 'messageCopy' | 'ctaText';
+  currentDraft: Partial<CampaignContent>;
+  segmentName: string;
+  segmentSize: number;
+  channel: string;
+  goal: string;
+}
+
+/**
+ * Regenerates a single field of a campaign draft without touching others.
+ * This preserves user edits on all other fields.
+ */
+export async function regenerateCampaignField(input: FieldRegenerationInput): Promise<{ value: string }> {
+  const { field, currentDraft, segmentName, segmentSize, channel, goal } = input;
+
+  const fieldDescriptions: Record<string, string> = {
+    campaignName: 'A unique, punchy campaign name (max 8 words). Must differ from the current name.',
+    objective: 'A specific marketing objective (1-2 sentences, action-oriented).',
+    messageCopy: `The full message body for ${channel}. Use {{firstName}} for personalization. Feel personal and urgent.`,
+    ctaText: 'A short call-to-action label (max 4 words, e.g. "Shop Now", "Claim Offer").',
+  };
+
+  const systemInstruction = `
+You are an expert CRM campaign copywriter.
+You are regenerating ONE specific field of an existing campaign draft.
+Return ONLY a JSON object with exactly one key: "value" containing the regenerated field content.
+Do NOT change any other aspect of the campaign.
+Rules:
+- The new value must differ meaningfully from the current value.
+- Maintain consistency with the other draft fields (objective, message, etc.).
+- Use Indian market context (₹, IST timings).
+`;
+
+  const userPrompt = `Regenerate only the "${field}" field for this campaign:
+- Segment: ${segmentName} (${segmentSize.toLocaleString()} customers)
+- Channel: ${channel}
+- Goal: ${goal}
+- Current campaign name: ${currentDraft.campaignName || 'Not set'}
+- Current objective: ${currentDraft.objective || 'Not set'}
+- Current message: ${currentDraft.messageCopy || 'Not set'}
+- Current CTA: ${currentDraft.ctaText || 'Not set'}
+
+Field to regenerate: "${field}"
+Field description: ${fieldDescriptions[field]}
+Current value: "${(currentDraft as any)[field] || 'Not set'}"
+
+Return: { "value": "<new value here>" }`;
+
+  const result = await callGroqJson(systemInstruction, userPrompt);
+
+  if (!result.value || typeof result.value !== 'string') {
+    throw new Error(`Failed to regenerate ${field}. Please retry.`);
+  }
+
+  return { value: result.value };
+}
+
+export interface PostLaunchInsights {
+  performanceSummary: string;
+  optimizationRecommendations: string[];
+  nextBestCampaign: string;
+  audienceExpansion: string;
+}
+
+/**
+ * Generates a post-launch AI insights snapshot using real campaign analytics.
+ * Result is meant to be stored in metadata_json on the campaign record.
+ */
+export async function generatePostLaunchInsights(campaignId: string): Promise<PostLaunchInsights> {
+  const analytics = await getCampaignAnalytics(campaignId);
+  const channelData = await getChannelPerformance();
+
+  const systemInstruction = `
+You are a senior CRM marketing analyst.
+You have been given real analytics data for a completed campaign.
+Generate actionable post-launch insights.
+Return ONLY a JSON object with exactly these fields:
+- performanceSummary: A 2-3 sentence plain-English analysis of campaign performance, referencing actual numbers.
+- optimizationRecommendations: An array of 3-5 specific, concrete recommendations (strings) to improve the next campaign.
+- nextBestCampaign: A short description of the best next campaign to run given this performance data (1-2 sentences).
+- audienceExpansion: A specific recommendation for expanding or refining the audience (1-2 sentences).
+
+Rules:
+- Reference actual metric numbers (CTR, delivery rate, etc.) in your summary.
+- Recommendations must be specific, not generic (e.g. "Switch to WhatsApp for 3x higher read rates" not just "improve engagement").
+- Base everything on the real data provided.
+`;
+
+  const userPrompt = `Analyze this campaign's real performance and generate insights:
+${JSON.stringify(analytics, null, 2)}
+
+Channel performance benchmarks for comparison:
+${JSON.stringify(channelData, null, 2)}`;
+
+  const result = await callGroqJson(systemInstruction, userPrompt);
+
+  if (!result.performanceSummary || !Array.isArray(result.optimizationRecommendations)) {
+    throw new Error('Failed to generate post-launch insights. Please retry.');
+  }
+
+  return result as PostLaunchInsights;
+}
+
+export interface AudienceRationale {
+  reason: string;
+  expectedConversionRate: number;
+  expectedRevenue: number;
+}
+
+/**
+ * Generates "Why This Audience?" explanation with predicted conversion and revenue.
+ * Uses actual segment preview stats as context.
+ */
+export async function generateAudienceRationale(
+  segmentName: string,
+  audienceSize: number,
+  previewStats: {
+    averageOrderValue: number;
+    potentialRevenue: number;
+    topPerformingCity: string;
+    averageOrdersCount: number;
+  },
+  channel: string,
+  goal: string
+): Promise<AudienceRationale> {
+  const systemInstruction = `
+You are a CRM data analyst explaining why a customer segment is valuable for a campaign.
+Return ONLY a JSON object with exactly these fields:
+- reason: 2-3 sentences explaining why this audience is well-suited for the campaign goal. Reference actual data.
+- expectedConversionRate: A realistic conversion rate estimate as a number (e.g. 8.5 for 8.5%). Base it on the channel and audience data.
+- expectedRevenue: An estimated revenue (in INR, as a number) based on audience size, average order value, and expected conversion.
+
+Base your estimates on the real data provided. Be realistic, not optimistic.
+`;
+
+  const userPrompt = `Explain why this audience suits this campaign:
+- Segment: ${segmentName}
+- Audience Size: ${audienceSize.toLocaleString()} customers
+- Average Order Value: ₹${previewStats.averageOrderValue.toFixed(0)}
+- Potential Revenue Pool: ₹${previewStats.potentialRevenue.toLocaleString()}
+- Top City: ${previewStats.topPerformingCity}
+- Avg Orders Per Customer: ${previewStats.averageOrdersCount.toFixed(1)}
+- Channel: ${channel}
+- Campaign Goal: ${goal}`;
+
+  const result = await callGroqJson(systemInstruction, userPrompt);
+
+  if (!result.reason || result.expectedConversionRate === undefined || result.expectedRevenue === undefined) {
+    throw new Error('Failed to generate audience rationale. Please retry.');
+  }
+
+  return {
+    reason: result.reason,
+    expectedConversionRate: typeof result.expectedConversionRate === 'number'
+      ? result.expectedConversionRate
+      : parseFloat(result.expectedConversionRate) || 0,
+    expectedRevenue: typeof result.expectedRevenue === 'number'
+      ? result.expectedRevenue
+      : parseFloat(result.expectedRevenue) || 0,
+  };
 }
 
 export interface AnalyticsInsights {

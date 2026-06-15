@@ -159,33 +159,33 @@ async function main() {
   await db.delete(schema.campaigns);
   console.log('✓  Analytics tables cleaned.');
 
-  // ─── Step 4: Define 3 campaigns ────────────────────────────────
+  // ─── Step 4: Define 3 seed campaigns (generic names, no hardcoded marketing copy) ──
   const now = new Date();
   const months = (n: number) => new Date(now.getTime() - n * 30 * 24 * 60 * 60 * 1000);
 
   const campaignDefs = [
     {
-      name: 'Mumbai Monsoon Offer — WhatsApp',
+      name: 'Retention Campaign — WhatsApp',
       channel: 'WHATSAPP' as const,
-      messageTemplate: 'Hi {{name}}! ☔ Beat the monsoon with our exclusive 30% off offer this week only. Shop now: https://xeno-crm.in/monsoon',
+      messageTemplate: 'Hi {{firstName}}, we have an exclusive offer just for you. Tap to explore.',
       segmentId: segA.id,
       launchTime: months(5),
       audienceCount: Math.min(500, customerIds.length),
       audienceOffset: 0,
     },
     {
-      name: 'Festive Season Email Blast',
+      name: 'Engagement Campaign — Email',
       channel: 'EMAIL' as const,
-      messageTemplate: 'Dear {{name}}, 🎉 Diwali is here! Enjoy up to 50% off across Fashion, Beauty & Lifestyle. Limited time. Shop at: https://xeno-crm.in/diwali',
+      messageTemplate: 'Dear {{firstName}}, check out our latest collection tailored for you.',
       segmentId: segB.id,
       launchTime: months(3),
       audienceCount: Math.min(400, customerIds.length),
       audienceOffset: 100,
     },
     {
-      name: 'Win-Back SMS — Lapsed Customers',
+      name: 'Winback Campaign — SMS',
       channel: 'SMS' as const,
-      messageTemplate: 'We miss you {{name}}! 💛 It has been a while. Here is 20% off your next order. Use code: XENO20 at https://xeno-crm.in/winback',
+      messageTemplate: 'Hi {{firstName}}, we miss you! Here is a special discount for your next order.',
       segmentId: segC.id,
       launchTime: months(1),
       audienceCount: Math.min(300, customerIds.length),

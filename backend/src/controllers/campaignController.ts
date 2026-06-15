@@ -9,7 +9,7 @@ import {
 
 export async function createCampaign(req: Request, res: Response, next: NextFunction) {
   try {
-    const { segmentId, name, channel, messageTemplate } = req.body;
+    const { segmentId, name, channel, messageTemplate, metadataJson } = req.body;
 
     // Express request validation
     if (!segmentId) {
@@ -29,7 +29,8 @@ export async function createCampaign(req: Request, res: Response, next: NextFunc
       segmentId,
       name,
       channel,
-      messageTemplate
+      messageTemplate,
+      metadataJson: metadataJson ?? {}
     });
 
     res.status(201).json(campaign);

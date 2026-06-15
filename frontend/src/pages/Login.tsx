@@ -594,13 +594,20 @@ export const Login: React.FC = () => {
   const bestChReadRate = bestCh ? formatPercent(bestCh.readRate || bestCh.openRate || 0) : '—';
 
   // Aggregate channel rates (weighted average across all channels)
-  const totalSent = channels.reduce((s, c: any) => s + (c.sent ?? 0), 0);
+  // NOTE: WhatsApp/RCS expose `read`, Email/SMS expose `opened` — sum both, never double-count
+  const totalSent      = channels.reduce((s, c: any) => s + (c.sent      ?? 0), 0);
   const totalDelivered = channels.reduce((s, c: any) => s + (c.delivered ?? 0), 0);
-  const totalOpened    = channels.reduce((s, c: any) => s + (c.read ?? c.opened ?? 0), 0);
+  const totalOpened    = channels.reduce((s, c: any) => {
+    // If both fields present prefer `read` for WA/RCS channels, else fall back to `opened`
+    const readVal   = c.read   ?? 0;
+    const openedVal = c.opened ?? 0;
+    // Only use one — whichever is non-zero first
+    return s + (readVal > 0 ? readVal : openedVal);
+  }, 0);
   const totalClicked   = channels.reduce((s, c: any) => s + (c.clicked ?? 0), 0);
-  const overallDeliveryRate = totalSent > 0 ? (totalDelivered / totalSent) * 100 : 0;
-  const overallOpenRate     = totalDelivered > 0 ? (totalOpened / totalDelivered) * 100 : 0;
-  const overallCtr          = totalDelivered > 0 ? (totalClicked / totalDelivered) * 100 : 0;
+  const overallDeliveryRate = totalSent      > 0 ? (totalDelivered / totalSent)      * 100 : 0;
+  const overallOpenRate     = totalDelivered > 0 ? (totalOpened    / totalDelivered) * 100 : 0;
+  const overallCtr          = totalDelivered > 0 ? (totalClicked   / totalDelivered) * 100 : 0;
 
   // Revenue MoM growth from trend data
   const momGrowth = revTrend.length >= 2
@@ -611,13 +618,16 @@ export const Login: React.FC = () => {
     ? `${momGrowth >= 0 ? '+' : ''}${momGrowth.toFixed(1)}% MoM`
     : 'Live';
 
-  // Campaign ROI: (total campaign revenue - total campaign cost) / total campaign cost
-  // Guard: if totalCampRevenue is 0 (no attribution data yet), show 0.0x not -1.0x
+  // Campaign ROI: (attributed campaign revenue - campaign cost) / campaign cost
+  // Cost model: ₹2.5 per message delivered (realistic India bulk SMS/WA pricing)
+  // Guard: if no attribution data yet, show 0.0× not -1.0×
+  // Cap at 45× to prevent absurd display values on low-cost, high-volume campaigns
   const totalCampRevenue = campaigns.reduce((s, c) => s + (c.revenue ?? 0), 0);
-  const totalCampCost    = campaigns.reduce((s, c) => s + ((c.audienceSize ?? 0) * 0.15), 0);
-  const campaignRoi      = (totalCampCost > 0 && totalCampRevenue > 0)
+  const totalCampCost    = campaigns.reduce((s, c) => s + ((c.audienceSize ?? 0) * 2.5), 0);
+  const rawCampaignRoi   = (totalCampCost > 0 && totalCampRevenue > 0)
     ? (totalCampRevenue - totalCampCost) / totalCampCost
     : 0;
+  const campaignRoi      = Math.min(rawCampaignRoi, 45);
 
   /* ── Build KPI_CARDS entirely from live data ── */
   const KPI_CARDS: KpiCardData[] = [
@@ -633,14 +643,14 @@ export const Login: React.FC = () => {
       ],
     },
     {
-      label: 'Revenue Influenced', primary: formatCompactCurrency(totalRevenue),
+      label: 'Attributed Revenue', primary: formatCompactCurrency(totalCampRevenue > 0 ? totalCampRevenue : totalRevenue),
       accentColor: '#10B981', sparkPath: 'M4 19 Q18 13, 32 16 T60 5',
-      growth: momLabel,
+      growth: totalCampRevenue > 0 ? momLabel : 'Live',
       details: [
-        { label: 'Full Amount',      value: formatIndianCurrency(totalRevenue) },
-        { label: 'Attributed Orders',value: formatFullNumber(totalOrders) },
-        { label: 'Avg. Order Value', value: formatIndianCurrency(aov) },
-        { label: 'Top City',         value: topCity },
+        { label: 'Campaign Attributed', value: formatIndianCurrency(totalCampRevenue) },
+        { label: 'Total Store Revenue', value: formatCompactCurrency(totalRevenue) },
+        { label: 'Avg. Order Value',    value: formatIndianCurrency(aov) },
+        { label: 'Top City',            value: topCity },
       ],
     },
     {
@@ -711,10 +721,10 @@ export const Login: React.FC = () => {
       color: '#F59E0B',
       desc: 'One-click deployment with real-time delivery tracking and direct revenue attribution per campaign.',
       insights: [
-        { label: 'ROI',           value: `${campaignRoi.toFixed(1)}×` },
-        { label: 'Total Revenue', value: formatCompactCurrency(totalRevenue) },
-        { label: 'Launch Time',   value: '< 2 min' },
-        { label: 'Channels',      value: '4' },
+        { label: 'ROI',               value: campaignRoi > 0 ? `${campaignRoi.toFixed(1)}×` : '—' },
+        { label: 'Attributed Revenue', value: totalCampRevenue > 0 ? formatCompactCurrency(totalCampRevenue) : formatCompactCurrency(totalRevenue) },
+        { label: 'Launch Time',        value: '< 2 min' },
+        { label: 'Channels',           value: '4' },
       ],
     },
   ];
@@ -798,15 +808,15 @@ export const Login: React.FC = () => {
             </div>
 
             <h1 style={{ fontSize: 'clamp(44px, 4.5vw, 76px)', fontWeight: 800, lineHeight: 1.1, letterSpacing: '-2px', margin: 0, color: '#FFFFFF' }}>
-              Turn Customer Data
+              The CRM That Knows
               <br/>
               <span style={{ background: 'linear-gradient(135deg, #4F8CFF 0%, #A855F7 45%, #10B981 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundSize: '200% 200%', animation: 'gradShift 6s ease infinite' }}>
-                Into Automated Revenue
+                Who To Message Next
               </span>
             </h1>
 
             <p style={{ fontSize: '17px', color: 'rgba(255,255,255,0.44)', lineHeight: 1.65, maxWidth: 580, margin: '18px 0 0', fontWeight: 400 }}>
-              Segment retail audiences, launch targeted campaigns across every channel, and attribute direct store revenue — all in one platform.
+              AI-powered customer intelligence for retail. Segment audiences, generate campaigns, and track attributed revenue — from one unified workspace.
             </p>
           </div>
 

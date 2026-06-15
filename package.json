@@ -10,5 +10,8 @@
     "build": "npm run build --workspace=backend && npm run build --workspace=frontend",
     "dev": "npm run dev --workspaces --parallel",
     "test": "npm run test --workspace=backend"
+  },
+  "dependencies": {
+    "puppeteer": "^25.1.0"
   }
 }

@@ -25,6 +25,18 @@ export interface Segment {
   createdAt: string;
 }
 
+export interface CampaignMetadata {
+  objective?: string;
+  ctaText?: string;
+  recommendedSendTime?: string;
+  reasoning?: string;
+  performanceSummary?: string;
+  optimizationRecommendations?: string[];
+  nextBestCampaign?: string;
+  audienceExpansion?: string;
+  insightsGeneratedAt?: string;
+}
+
 export interface Campaign {
   id: string;
   segmentId: string | null;
@@ -33,6 +45,7 @@ export interface Campaign {
   messageTemplate: string;
   status: 'DRAFT' | 'SCHEDULED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
   audienceSize: number;
+  metadataJson: CampaignMetadata;
   createdAt: string;
 }
 
@@ -115,11 +128,32 @@ export interface ChannelPerformance {
   ctr: number;
 }
 
-export interface CampaignContentAI {
-  campaignTitle: string;
-  campaignObjective: string;
-  messageContent: string;
-  recommendedChannel: 'WHATSAPP' | 'SMS' | 'EMAIL' | 'RCS';
+export interface CampaignDraftAI {
+  campaignName: string;
+  objective: string;
+  messageCopy: string;
+  ctaText: string;
+  recommendedSendTime: string;
+  reasoning: string;
+  campaignTitle?: string;
+  campaignObjective?: string;
+  messageContent?: string;
+  recommendedChannel?: string;
+}
+
+export interface PostLaunchInsightsAI {
+  performanceSummary: string;
+  optimizationRecommendations: string[];
+  nextBestCampaign: string;
+  audienceExpansion: string;
+  cached?: boolean;
+  insightsGeneratedAt?: string;
+}
+
+export interface AudienceRationaleAI {
+  reason: string;
+  expectedConversionRate: number;
+  expectedRevenue: number;
 }
 
 export interface AnalyticsInsightsAI {
@@ -138,6 +172,17 @@ export interface SegmentEnrichmentAI {
   audienceRationale: string;
   recommendedChannel: 'WHATSAPP' | 'SMS' | 'EMAIL' | 'RCS';
   recommendedCampaign: string;
+}
+
+export interface CRMHealth {
+  campaignHealthScore: number;
+  audienceQualityScore: number;
+  topConvertingCity: string;
+  revenueAttributionPct: number;
+  bestCampaign: { id: string; name: string; revenue: number; channel: string } | null;
+  worstCampaign: { id: string; name: string; revenue: number; channel: string } | null;
+  totalAttributedRevenue: number;
+  avgCampaignROI: number;
 }
 
 export interface Customer {
@@ -399,7 +444,7 @@ export function getCampaign(id: string): Promise<Campaign> {
   return request<Campaign>(`/api/campaigns/${id}`);
 }
 
-export function createCampaign(campaign: { segmentId: string; name: string; channel: string; messageTemplate: string }): Promise<Campaign> {
+export function createCampaign(campaign: { segmentId: string; name: string; channel: string; messageTemplate: string; metadataJson?: CampaignMetadata }): Promise<Campaign> {
   return request<Campaign>('/api/campaigns', {
     method: 'POST',
     body: JSON.stringify(campaign)
@@ -433,10 +478,45 @@ export function generateAISegment(prompt: string): Promise<SegmentRule> {
   });
 }
 
-export function generateAICampaign(prompt: string): Promise<CampaignContentAI> {
-  return request<CampaignContentAI>('/api/ai/campaign', {
+export function generateAICampaign(prompt: string): Promise<CampaignDraftAI> {
+  return request<CampaignDraftAI>('/api/ai/campaign', {
     method: 'POST',
     body: JSON.stringify({ prompt })
+  });
+}
+
+export function generateCampaignDraft(segmentName: string, segmentSize: number, channel: string, goal: string): Promise<CampaignDraftAI> {
+  return request<CampaignDraftAI>('/api/ai/campaign/draft', {
+    method: 'POST',
+    body: JSON.stringify({ segmentName, segmentSize, channel, goal })
+  });
+}
+
+export function regenerateCampaignField(
+  field: string,
+  currentDraft: Partial<CampaignDraftAI>,
+  segmentName: string,
+  segmentSize: number,
+  channel: string,
+  goal: string
+): Promise<{ value: string }> {
+  return request<{ value: string }>('/api/ai/campaign/regenerate-field', {
+    method: 'POST',
+    body: JSON.stringify({ field, currentDraft, segmentName, segmentSize, channel, goal })
+  });
+}
+
+export function getCampaignPostLaunchInsights(campaignId: string, forceRefresh: boolean = false): Promise<PostLaunchInsightsAI> {
+  return request<PostLaunchInsightsAI>('/api/ai/campaign/post-launch-insights', {
+    method: 'POST',
+    body: JSON.stringify({ campaignId, forceRefresh })
+  });
+}
+
+export function getAudienceRationale(segmentName: string, audienceSize: number, previewStats: any, channel: string, goal: string): Promise<AudienceRationaleAI> {
+  return request<AudienceRationaleAI>('/api/ai/audience-rationale', {
+    method: 'POST',
+    body: JSON.stringify({ segmentName, audienceSize, previewStats, channel, goal })
   });
 }
 
@@ -521,4 +601,12 @@ export function createOrder(order: {
     method: 'POST',
     body: JSON.stringify(order)
   });
+}
+
+export function fetchCRMHealth(): Promise<CRMHealth> {
+  return request<CRMHealth>('/api/analytics/crm-health');
+}
+
+export function pollCampaignAnalytics(campaignId: string): Promise<CampaignAnalytics> {
+  return request<CampaignAnalytics>(`/api/analytics/campaigns/${campaignId}`);
 }

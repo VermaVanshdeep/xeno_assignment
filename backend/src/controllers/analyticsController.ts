@@ -5,7 +5,8 @@ import {
   getChannelPerformance as getChannelPerformanceService, 
   getDashboardMetrics as getDashboardMetricsService,
   getRevenueTrend as getRevenueTrendService,
-  getCampaignPerformanceSummary as getCampaignPerformanceSummaryService
+  getCampaignPerformanceSummary as getCampaignPerformanceSummaryService,
+  getCRMHealth as getCRMHealthService
 } from '../services/analyticsService';
 
 export async function getDashboardMetrics(req: Request, res: Response, next: NextFunction) {
@@ -66,3 +67,11 @@ export async function getCampaignsSummary(req: Request, res: Response, next: Nex
   }
 }
 
+export async function getCRMHealth(req: Request, res: Response, next: NextFunction) {
+  try {
+    const health = await getCRMHealthService();
+    res.json(health);
+  } catch (error) {
+    next(error);
+  }
+}

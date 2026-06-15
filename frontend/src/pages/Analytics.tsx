@@ -183,19 +183,23 @@ export const Analytics: React.FC = () => {
       ];
     }
     return [
-      { name: 'Audience', count: campaignAnalytics.audienceSize, color: '#4F8CFF' },
-      { name: 'Delivered', count: campaignAnalytics.delivered, color: '#22D3EE' },
-      { name: 'Opened', count: campaignAnalytics.read || campaignAnalytics.opened, color: '#10B981' },
-      { name: 'Clicked', count: campaignAnalytics.clicked, color: '#F59E0B' }
+      { name: 'Audience',  count: campaignAnalytics.audienceSize, color: '#4F8CFF' },
+      { name: 'Delivered', count: campaignAnalytics.delivered,    color: '#22D3EE' },
+      { name: 'Opened',    count: (campaignAnalytics.read > 0 ? campaignAnalytics.read : campaignAnalytics.opened), color: '#10B981' },
+      { name: 'Clicked',   count: campaignAnalytics.clicked,      color: '#F59E0B' }
     ];
   }, [campaignAnalytics]);
 
   // Funnel calculations (Memoized)
   const funnelData = useMemo(() => {
-    const totalSentFunnel = channels?.reduce((acc, c) => acc + c.sent, 0) || 0;
-    const totalDeliveredFunnel = channels?.reduce((acc, c) => acc + c.delivered, 0) || 0;
-    const totalOpenedFunnel = channels?.reduce((acc, c) => acc + (c.read || c.opened), 0) || 0;
-    const totalClickedFunnel = channels?.reduce((acc, c) => acc + c.clicked, 0) || 0;
+    const totalSentFunnel      = channels?.reduce((acc, c) => acc + c.sent, 0) || 0;
+    const totalDeliveredFunnel  = channels?.reduce((acc, c) => acc + c.delivered, 0) || 0;
+    const totalOpenedFunnel     = channels?.reduce((acc, c) => {
+      const r = (c as any).read ?? 0;
+      const o = c.opened        ?? 0;
+      return acc + (r > 0 ? r : o);
+    }, 0) || 0;
+    const totalClickedFunnel    = channels?.reduce((acc, c) => acc + c.clicked, 0) || 0;
 
     const overallDeliveryRate = totalSentFunnel > 0 ? (totalDeliveredFunnel / totalSentFunnel) * 100 : 0;
     const overallOpenRate = totalDeliveredFunnel > 0 ? (totalOpenedFunnel / totalDeliveredFunnel) * 100 : 0;
@@ -204,7 +208,7 @@ export const Analytics: React.FC = () => {
     return campaignAnalytics ? {
       sent: campaignAnalytics.sent,
       delivered: campaignAnalytics.delivered,
-      opened: campaignAnalytics.read || campaignAnalytics.opened,
+      opened:       (campaignAnalytics.read > 0 ? campaignAnalytics.read : campaignAnalytics.opened),
       clicked: campaignAnalytics.clicked,
       deliveryRate: campaignAnalytics.deliveryRate,
       openRate: campaignAnalytics.readRate || campaignAnalytics.openRate,

@@ -5,7 +5,8 @@ import {
   CustomerAnalyticsSummary, 
   ChannelPerformance, 
   DashboardMetrics,
-  RevenueTrend
+  RevenueTrend,
+  CRMHealth
 } from '../types/analytics';
 
 // Channel messaging costs (INR)
@@ -348,3 +349,133 @@ export async function getRevenueTrend(): Promise<RevenueTrend[]> {
   }
 }
 
+/**
+ * Returns CRM-level health scores and intelligence summary.
+ * All values are derived from real database queries — no hardcoded metrics.
+ */
+export async function getCRMHealth(): Promise<CRMHealth> {
+  try {
+    // 1. Campaign health score: weighted avg delivery+ctr across completed campaigns
+    const healthQuery = `
+      SELECT 
+        c.id, c.name, c.channel,
+        COUNT(CASE WHEN e.event_type = 'SENT' THEN 1 END)::float AS sent,
+        COUNT(CASE WHEN e.event_type = 'DELIVERED' THEN 1 END)::float AS delivered,
+        COUNT(CASE WHEN e.event_type = 'CLICKED' THEN 1 END)::float AS clicked
+      FROM campaigns c
+      JOIN communication_events e ON c.id = e.campaign_id
+      WHERE c.status IN ('COMPLETED', 'RUNNING')
+      GROUP BY c.id, c.name, c.channel
+      HAVING COUNT(CASE WHEN e.event_type = 'SENT' THEN 1 END) > 0;
+    `;
+    const healthRes = await pool.query(healthQuery);
+    
+    let totalHealthScore = 0;
+    let healthCount = 0;
+    for (const row of healthRes.rows) {
+      const deliveryRate = row.sent > 0 ? (row.delivered / row.sent) * 100 : 0;
+      const ctr = row.delivered > 0 ? (row.clicked / row.delivered) * 100 : 0;
+      // Weighted: delivery 40%, ctr 60% (normalized to 100-point scale)
+      // Delivery typically 95-100%, CTR typically 5-20%
+      const campaignScore = Math.min(100, (deliveryRate * 0.4) + (Math.min(ctr * 5, 60)));
+      totalHealthScore += campaignScore;
+      healthCount++;
+    }
+    const campaignHealthScore = healthCount > 0 ? Math.round(totalHealthScore / healthCount) : 0;
+
+    // 2. Audience quality: % of customers who have placed at least 1 order
+    const qualityQuery = `
+      SELECT 
+        COUNT(DISTINCT c.id)::float AS total_customers,
+        COUNT(DISTINCT o.customer_id)::float AS customers_with_orders
+      FROM customers c
+      LEFT JOIN orders o ON c.id = o.customer_id;
+    `;
+    const qualityRes = await pool.query(qualityQuery);
+    const { total_customers, customers_with_orders } = qualityRes.rows[0] || { total_customers: 0, customers_with_orders: 0 };
+    const audienceQualityScore = total_customers > 0 
+      ? Math.round((customers_with_orders / total_customers) * 100)
+      : 0;
+
+    // 3. Top converting city: city with most clicked events relative to delivered
+    const cityQuery = `
+      SELECT 
+        cust.city,
+        COUNT(CASE WHEN e.event_type = 'CLICKED' THEN 1 END)::float AS clicked,
+        COUNT(CASE WHEN e.event_type = 'DELIVERED' THEN 1 END)::float AS delivered
+      FROM communication_events e
+      JOIN customers cust ON e.customer_id = cust.id
+      GROUP BY cust.city
+      HAVING COUNT(CASE WHEN e.event_type = 'DELIVERED' THEN 1 END) > 10
+      ORDER BY (COUNT(CASE WHEN e.event_type = 'CLICKED' THEN 1 END)::float / 
+                NULLIF(COUNT(CASE WHEN e.event_type = 'DELIVERED' THEN 1 END)::float, 0)) DESC
+      LIMIT 1;
+    `;
+    const cityRes = await pool.query(cityQuery);
+    const topConvertingCity = cityRes.rows[0]?.city || 'N/A';
+
+    // 4. Revenue attribution: total attributed vs total orders revenue
+    const revenueQuery = `
+      SELECT COALESCE(SUM(amount), 0)::float AS total_revenue FROM orders;
+    `;
+    const revenueRes = await pool.query(revenueQuery);
+    const totalRevenue = revenueRes.rows[0]?.total_revenue || 0;
+
+    // Sum up attributed revenue across all completed campaigns
+    let totalAttributedRevenue = 0;
+    let totalROI = 0;
+    let roiCount = 0;
+    const bestCampaignData: { id: string; name: string; revenue: number; channel: string } | null = 
+      healthRes.rows.length > 0 ? null : null;
+    const worstCampaignData: { id: string; name: string; revenue: number; channel: string } | null = null;
+
+    const campaignRevenues: Array<{ id: string; name: string; revenue: number; channel: string; roi: number }> = [];
+    for (const row of healthRes.rows) {
+      const rev = await getCampaignRevenue(row.id);
+      totalAttributedRevenue += rev;
+      const unitCost = CHANNEL_COSTS[row.channel.toUpperCase() as keyof typeof CHANNEL_COSTS] || 0.15;
+      const cost = (row.sent || 0) * unitCost;
+      const roi = cost > 0 ? ((rev - cost) / cost) * 100 : 0;
+      totalROI += roi;
+      roiCount++;
+      campaignRevenues.push({ id: row.id, name: row.name, revenue: rev, channel: row.channel, roi });
+    }
+
+    const avgCampaignROI = roiCount > 0 ? Math.round(totalROI / roiCount) : 0;
+    const revenueAttributionPct = totalRevenue > 0 
+      ? Math.round((totalAttributedRevenue / totalRevenue) * 100)
+      : 0;
+
+    // Best and worst campaigns by attributed revenue
+    const sorted = [...campaignRevenues].sort((a, b) => b.revenue - a.revenue);
+    const bestCampaign = sorted.length > 0 
+      ? { id: sorted[0].id, name: sorted[0].name, revenue: sorted[0].revenue, channel: sorted[0].channel }
+      : null;
+    const worstCampaign = sorted.length > 1
+      ? { id: sorted[sorted.length - 1].id, name: sorted[sorted.length - 1].name, revenue: sorted[sorted.length - 1].revenue, channel: sorted[sorted.length - 1].channel }
+      : null;
+
+    return {
+      campaignHealthScore,
+      audienceQualityScore,
+      topConvertingCity,
+      revenueAttributionPct,
+      bestCampaign,
+      worstCampaign,
+      totalAttributedRevenue,
+      avgCampaignROI
+    };
+  } catch (error) {
+    console.error('Failed to calculate CRM health:', error);
+    return {
+      campaignHealthScore: 0,
+      audienceQualityScore: 0,
+      topConvertingCity: 'N/A',
+      revenueAttributionPct: 0,
+      bestCampaign: null,
+      worstCampaign: null,
+      totalAttributedRevenue: 0,
+      avgCampaignROI: 0
+    };
+  }
+}

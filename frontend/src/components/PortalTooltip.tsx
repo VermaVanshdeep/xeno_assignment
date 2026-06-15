@@ -8,15 +8,23 @@ interface PortalTooltipProps {
 }
 
 export const PortalTooltip: React.FC<PortalTooltipProps> = ({ active, targetRef, children }) => {
-  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number; below: boolean } | null>(null);
 
   useEffect(() => {
     if (active && targetRef.current) {
       const rect = targetRef.current.getBoundingClientRect();
-      setCoords({
-        top: rect.top + window.scrollY - 8, // Spacing above the card
-        left: rect.left + window.scrollX + rect.width / 2,
-      });
+      const TOOLTIP_WIDTH = 260;
+      const MARGIN = 10;
+
+      // Use viewport (fixed) coords
+      const below = rect.top < 140;
+      const topPos = below ? rect.bottom + MARGIN : rect.top - MARGIN;
+
+      // Horizontal: centre on card, clamp to viewport
+      let leftPos = rect.left + rect.width / 2 - TOOLTIP_WIDTH / 2;
+      leftPos = Math.max(MARGIN, Math.min(leftPos, window.innerWidth - TOOLTIP_WIDTH - MARGIN));
+
+      setCoords({ top: topPos, left: leftPos, below });
     }
   }, [active, targetRef]);
 
@@ -25,20 +33,21 @@ export const PortalTooltip: React.FC<PortalTooltipProps> = ({ active, targetRef,
   return ReactDOM.createPortal(
     <div
       style={{
-        position: 'absolute',
+        position: 'fixed',
         top: coords.top,
         left: coords.left,
-        transform: 'translate(-50%, -100%)',
+        transform: coords.below ? 'translateY(0)' : 'translateY(-100%)',
         zIndex: 99999,
         pointerEvents: 'none',
-        background: 'rgba(15, 23, 42, 0.95)',
-        border: '1px solid rgba(255, 255, 255, 0.08)',
-        borderRadius: '12px',
-        padding: '12px 16px',
-        boxShadow: '0 12px 40px rgba(0, 0, 0, 0.45)',
+        background: 'rgba(11, 17, 35, 0.97)',
+        border: '1px solid rgba(255, 255, 255, 0.10)',
+        borderRadius: '14px',
+        padding: '14px 18px',
+        boxShadow: '0 20px 60px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(79,140,255,0.08)',
         color: '#FFFFFF',
-        width: 'max-content',
-        maxWidth: '260px',
+        width: '260px',
+        backdropFilter: 'blur(20px)',
+        WebkitBackdropFilter: 'blur(20px)',
         opacity: active ? 1 : 0,
         transition: 'opacity 150ms ease-in-out',
         animation: 'portalTooltipFadeIn 150ms ease-out forwards',

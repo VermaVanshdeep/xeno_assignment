@@ -9,7 +9,7 @@ import {
 } from '../services/api';
 import type { SegmentRule, ConditionRule, SegmentPreviewResponse } from '../services/api';
 import DataTable from '../components/DataTable';
-import EmptyState from '../components/EmptyState';
+import { BrandedEmptyState } from '../components/BrandedEmptyState';
 import { BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 
 interface BuilderCondition {
@@ -277,10 +277,12 @@ export const Segments: React.FC = () => {
         {loadingSegments ? (
           <p className="text-body text-muted">Loading segments...</p>
         ) : (!savedSegments || savedSegments.length === 0) ? (
-          <EmptyState
-            title="No segments saved yet"
-            description="Build a segment below and save it to reuse it in campaigns."
-          />
+          <div style={{ padding: '20px' }}>
+            <BrandedEmptyState
+              title="No Segments Found"
+              description="Build a segment below and save it to reuse it in campaigns."
+            />
+          </div>
         ) : (
           <div className="table-container" style={{ maxHeight: '200px' }}>
             <DataTable

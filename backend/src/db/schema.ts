@@ -51,6 +51,9 @@ export const campaigns = pgTable('campaigns', {
   messageTemplate: text('message_template').notNull(),
   status: varchar('status', { length: 50 }).default('DRAFT').notNull(), // DRAFT, SCHEDULED, RUNNING, COMPLETED, FAILED, CANCELLED
   audienceSize: integer('audience_size').default(0).notNull(),
+  // AI-generated metadata: draft-time (objective, ctaText, recommendedSendTime, reasoning)
+  // and post-launch snapshot (performanceSummary, optimizationRecommendations, nextBestCampaign, audienceExpansion, insightsGeneratedAt)
+  metadataJson: jsonb('metadata_json').default({}).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (table) => [
   index('campaigns_status_idx').on(table.status),

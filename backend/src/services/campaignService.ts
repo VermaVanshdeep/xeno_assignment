@@ -9,7 +9,7 @@ import { CreateCampaignData, CampaignLaunchResult, CampaignStatus } from '../typ
  * Validates target segment existence, channel validation, and templates.
  */
 export async function createCampaign(data: CreateCampaignData): Promise<typeof schema.campaigns.$inferSelect> {
-  const { segmentId, name, channel, messageTemplate } = data;
+  const { segmentId, name, channel, messageTemplate, metadataJson } = data;
 
   // 1. Validate inputs
   if (!name || name.trim() === '') {
@@ -48,7 +48,8 @@ export async function createCampaign(data: CreateCampaignData): Promise<typeof s
       channel: channel.toUpperCase(),
       messageTemplate,
       status: 'DRAFT',
-      audienceSize: 0
+      audienceSize: 0,
+      metadataJson: metadataJson ?? {}
     })
     .returning();
 

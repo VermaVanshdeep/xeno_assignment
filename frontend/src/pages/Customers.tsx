@@ -83,7 +83,9 @@ const OcrImportModal: React.FC<OcrImportModalProps> = React.memo(({ isOpen, onCl
       });
 
       const response = await ocrImportInvoice(base64, file.name, file.type);
-      if (!response.success) throw new Error('Extraction failed');
+      if (!response.success) {
+        throw new Error(response.message || 'Extraction failed');
+      }
 
       const d = response.data;
       setExtracted(d);
@@ -95,6 +97,18 @@ const OcrImportModal: React.FC<OcrImportModalProps> = React.memo(({ isOpen, onCl
       setAmount(d.amount > 0 ? String(d.amount) : '');
       setOrderDate(d.orderDate || new Date().toISOString().split('T')[0]);
       setCategory(d.category || 'Other');
+      
+      console.log('FORM_STATE', { 
+        firstName: d.firstName, 
+        lastName: d.lastName, 
+        email: d.email, 
+        phone: d.phone, 
+        city: d.city, 
+        amount: d.amount, 
+        orderDate: d.orderDate, 
+        category: d.category 
+      });
+
       setPhase('preview');
     } catch (err: any) {
       setError(err.message || 'Failed to extract data from document.');

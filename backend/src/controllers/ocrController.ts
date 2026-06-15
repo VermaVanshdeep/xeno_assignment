@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import Groq from 'groq-sdk';
+const pdfParse = require('pdf-parse/index.js');
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -23,7 +24,8 @@ Rules:
 - For phone: include country code if present, remove spaces/dashes
 - For orderDate: use today's date if not found (${new Date().toISOString().split('T')[0]})
 - For category: guess from item descriptions if not explicit
-- Return ONLY the JSON object, no explanation, no markdown code blocks`;
+- Return ONLY the JSON object, no explanation, no markdown code blocks
+- Include these exact fields, or fallback to variations like "name", "fullName", "emailAddress", "mobile", "phoneNumber", "location", "total", "grandTotal", "invoiceAmount", "totalAmount", "date", "invoiceDate" if they appear`;
 
 /**
  * POST /api/orders/ocr
@@ -83,22 +85,17 @@ export async function ocrImport(req: Request, res: Response, next: NextFunction)
 
       extractedText = response.choices[0]?.message?.content ?? '';
     } else {
-      // PDF: decode base64 and extract text via text model
-      // Since Groq doesn't support PDFs natively, decode the base64 and send as text
+      // PDF: decode base64 and extract text via pdf-parse
       let pdfTextContent = '';
       try {
         const buffer = Buffer.from(fileData, 'base64');
-        // Basic text extraction from PDF buffer — look for readable text
-        const rawText = buffer.toString('latin1');
-        // Extract printable ASCII sequences (basic PDF text layer extraction)
-        const matches = rawText.match(/[\x20-\x7E\n\r\t]{4,}/g) ?? [];
-        pdfTextContent = matches
-          .filter(s => s.trim().length > 3)
-          .join(' ')
-          .substring(0, 3000);
-      } catch {
+        const pdfData = await pdfParse(buffer);
+        pdfTextContent = pdfData.text.substring(0, 3000);
+      } catch (err: any) {
+        console.error('[ocr]: PDF Parse error:', err);
         pdfTextContent = `[PDF file: ${fileName}] Unable to extract text automatically.`;
       }
+      console.log('OCR_RAW_TEXT', pdfTextContent.substring(0, 500) + '...');
 
       const response = await groq.chat.completions.create({
         model: 'llama-3.3-70b-versatile',
@@ -119,8 +116,10 @@ export async function ocrImport(req: Request, res: Response, next: NextFunction)
       extractedText = response.choices[0]?.message?.content ?? '';
     }
 
+    console.log('OCR_AI_RESPONSE', extractedText);
+
     // Parse the JSON response from Groq
-    let parsed: Record<string, unknown>;
+    let parsed: Record<string, any>;
     try {
       // Strip markdown code blocks if Groq wraps in ```json...```
       const cleaned = extractedText
@@ -128,25 +127,68 @@ export async function ocrImport(req: Request, res: Response, next: NextFunction)
         .replace(/\s*```$/, '')
         .trim();
       parsed = JSON.parse(cleaned);
+      console.log('OCR_PARSED_RESULT', parsed);
     } catch {
       console.error('[ocr]: Failed to parse Groq response as JSON:', extractedText);
       return res.status(422).json({
         success: false,
-        message: 'Could not extract structured data from the document. Please fill in the fields manually.',
+        message: 'Could not extract structured data from the document. Please ensure it is a clear invoice or receipt.',
+        rawText: extractedText.substring(0, 300),
+      });
+    }
+
+    // 6. Split customerName/name/fullName
+    let firstName = String(parsed.firstName || '').trim();
+    let lastName = String(parsed.lastName || '').trim();
+    const fullName = parsed.customerName || parsed.name || parsed.fullName || '';
+
+    if (!firstName && !lastName && fullName) {
+      const parts = String(fullName).trim().split(' ');
+      firstName = parts[0] || '';
+      lastName = parts.slice(1).join(' ') || '';
+    }
+
+    const email = String(parsed.email || parsed.emailAddress || '').trim().toLowerCase();
+    const phone = String(parsed.phone || parsed.mobile || parsed.phoneNumber || '').trim();
+    const city = String(parsed.city || parsed.location || '').trim();
+
+    // 7. Ensure amount maps correctly from: total, grandTotal, invoiceAmount, amount, totalAmount
+    const rawAmount = parsed.amount || parsed.total || parsed.grandTotal || parsed.invoiceAmount || parsed.totalAmount || 0;
+    
+    // Normalize amounts (e.g. "Rs. 1,000" -> 1000)
+    let amountNum = typeof rawAmount === 'number' ? rawAmount : parseFloat(String(rawAmount).replace(/[^0-9.]/g, ''));
+    if (isNaN(amountNum)) amountNum = 0;
+
+    // 8. Ensure dates are parsed from common invoice formats
+    let rawDate = parsed.orderDate || parsed.date || parsed.invoiceDate || '';
+    let formattedDate = new Date().toISOString().split('T')[0];
+    if (rawDate) {
+      const dateObj = new Date(rawDate);
+      if (!isNaN(dateObj.getTime())) {
+        formattedDate = dateObj.toISOString().split('T')[0];
+      }
+    }
+
+    // 9. If all fields are empty, throw 422
+    const isEmpty = !firstName && !lastName && !email && !phone && amountNum === 0;
+    if (isEmpty) {
+      return res.status(422).json({
+        success: false,
+        message: 'Could not extract structured data from the document. Please ensure it is a clear invoice or receipt.',
         rawText: extractedText.substring(0, 300),
       });
     }
 
     // Validate and sanitize the extracted fields
     const result = {
-      firstName:  String(parsed.firstName  ?? '').trim(),
-      lastName:   String(parsed.lastName   ?? '').trim(),
-      email:      String(parsed.email      ?? '').trim().toLowerCase(),
-      phone:      String(parsed.phone      ?? '').trim(),
-      city:       String(parsed.city       ?? '').trim(),
-      amount:     Number(parsed.amount     ?? 0),
-      orderDate:  String(parsed.orderDate  ?? new Date().toISOString().split('T')[0]).trim(),
-      category:   String(parsed.category   ?? 'Other').trim(),
+      firstName,
+      lastName,
+      email,
+      phone,
+      city,
+      amount:     amountNum,
+      orderDate:  formattedDate,
+      category:   String(parsed.category   || 'Other').trim(),
     };
 
     console.log(`[ocr]: Extraction successful — ${result.firstName} ${result.lastName}, ₹${result.amount}`);
