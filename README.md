@@ -232,6 +232,33 @@ The platform features a multi-layered analytics engine tracing from raw SQL to U
 
 ---
 
+## Feature Demonstration
+
+This section presents high-resolution screenshots of the live Xeno CRM application.
+
+### Login
+![Login](docs/screenshots/login-page.png)
+
+### Dashboard
+![Dashboard](docs/screenshots/dashboard-page.png)
+
+### Customer Management
+![Customers](docs/screenshots/customers-page.png)
+
+### Audience Segmentation
+![Segments](docs/screenshots/segments-page.png)
+
+### Campaign Builder
+![Campaigns](docs/screenshots/campaigns-page.png)
+
+### Analytics
+![Analytics](docs/screenshots/analytics-page.png)
+
+### AI Copilot
+![AI Copilot](docs/screenshots/ai-copilot-page.png)
+
+---
+
 ## Installation
 
 ### 1. Clone the repository
@@ -320,20 +347,6 @@ npm run dev
     ├── tailwind.config.js
     └── package.json
 ```
-
----
-
-## Screenshots Section
-
-![Dashboard View](https://placehold.co/800x450/1e1e2e/a6accd?text=Dashboard+Screenshot)
-
-![Segment Builder](https://placehold.co/800x450/1e1e2e/a6accd?text=Segment+Builder+Screenshot)
-
-![Campaign Manager](https://placehold.co/800x450/1e1e2e/a6accd?text=Campaign+Builder+Screenshot)
-
-![Analytics Funnel](https://placehold.co/800x450/1e1e2e/a6accd?text=Analytics+Screenshot)
-
-![AI Copilot](https://placehold.co/800x450/1e1e2e/a6accd?text=AI+Copilot+Screenshot)
 
 ---
 
